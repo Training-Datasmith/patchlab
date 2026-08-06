@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    // Tests run under vitest, which loads modules as ESM regardless of
+    // package.json. The src/ build (`npm run build`, which uses the root
+    // tsconfig.json) continues to emit CommonJS. This override only affects
+    // type checking — necessary so tsc allows top-level `await import(...)`
+    // and `import.meta.url` in test files, both of which are valid at vitest
+    // runtime but illegal in the CommonJS module classification.
+    "module": "esnext",
+    "moduleResolution": "bundler"
+  },
+  "include": ["src/**/*", "test/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

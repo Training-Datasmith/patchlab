@@ -1,0 +1,15 @@
+# Example user-global language detector — copy to ~/.patchlab/languages/python.yaml
+#
+# Suggests a Python base image, pinning the minor version from `requires-python`
+# in pyproject.toml (e.g. requires-python = ">=3.11" -> python:3.11-slim). Falls
+# back to default_image when no version can be read.
+language: Python
+marker: pyproject.toml
+default_image: python:3.12-slim
+version:
+  strategy: regex
+  # Match the first two version numbers after requires-python, skipping any
+  # leading comparison operators (>=, ~=, ==, etc.). The doubled '' is YAML's
+  # escape for a single quote inside a single-quoted scalar.
+  pattern: 'requires-python\s*=\s*["''][><=~ ]*(\d+)\.(\d+)'
+  image_template: 'python:{1}.{2}-slim'

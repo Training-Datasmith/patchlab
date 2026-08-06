@@ -1,0 +1,70 @@
+{
+  // Type-check-only configuration covering both `src/` and `test/`.
+  //
+  // Why this file exists separate from `tsconfig.json`:
+  //   `tsconfig.json` is the build configuration. It sets `rootDir: "src"`
+  //   and `include: ["src/**/*"]` so that `npm run build` (which runs `tsc`)
+  //   emits a clean `dist/` tree containing only the shipped package — no
+  //   stray `dist/test/` output, no widened `rootDir` that would force a
+  //   different output layout.
+  //
+  //   The cost of that narrow scope is that `tsc` never sees `test/**`, and
+  //   `npm test` runs vitest which transpiles via esbuild without
+  //   type-checking. The combined effect is that type errors confined to test
+  //   files ship silently — caught only when an IDE's tsserver happens to
+  //   open the file, or when a runtime path exercises the bad value.
+  //
+  //   Concrete example that motivated this file: a manifest fixture passed
+  //   `environment: undefined` where the type required
+  //   `Record<string, string>`. The only consumer at the time read the field
+  //   as `environment ?? {}`, so the test ran green; a different consumer
+  //   iterating the field directly would have crashed.
+  //
+  // What this configuration does:
+  //   Extends the build configuration, then widens `include` to cover the
+  //   test tree and disables emit. Running `tsc -p tsconfig.tests.json`
+  //   (exposed as `npm run typecheck:tests`) performs a real type-check pass
+  //   over `src/` + `test/` without touching `dist/`. Pairs with
+  //   `npm run build` — that one stays scoped to the shipped package; this
+  //   one covers the test fixtures.
+  //
+  // Why not just drop `"test"` from the main `exclude`?
+  //   That would force `rootDirectory` to widen to cover both directories,
+  //   which changes where `tsc` places emitted output and complicates the
+  //   dist layout. A separate type-check-only configuration keeps the build
+  //   surface unchanged.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // `rootDir` is set to the project root because we are not emitting;
+    // leaving it at the inherited `"src"` would error once `test/**` is
+    // in `include`.
+    "rootDir": ".",
+    // Override the build configuration's `module: "Node16"` /
+    // `moduleResolution: "Node16"` for the test pass.
+    //
+    // The build configuration ships a CommonJS-compatible package (no
+    // `"type": "module"` in package.json, `.js` extensions on relative
+    // imports), so Node16 mode is right for `src/`. But test files use
+    // ESM-only features that vitest handles transparently via esbuild:
+    //   - top-level `await import(...)` after `vi.mock(...)`
+    //     (the standard vitest mocking pattern)
+    //   - `import.meta.url` for `__dirname` equivalence
+    // Under Node16 mode without `"type": "module"`, tsc classifies `.ts`
+    // files as CommonJS and flags both as errors (TS1309, TS1470).
+    //
+    // `module: "ESNext"` + `moduleResolution: "Bundler"` matches the
+    // execution model vitest actually uses: a bundler-style runner that
+    // resolves modules as ESM. This is type-check-only — no output is
+    // emitted, so the build's CommonJS-shipping behavior is unaffected.
+    "module": "ESNext",
+    "moduleResolution": "Bundler"
+  },
+  // Override the base `exclude` to drop `"test"`. TypeScript inherits
+  // `exclude` from the extended config when the extending config does not
+  // specify one, so without this override the test tree would be added to
+  // `include` and then silently filtered back out — the type-check would
+  // exit 0 even with real errors in `test/**`.
+  "exclude": ["node_modules", "dist"],
+  "include": ["src/**/*", "test/**/*"]
+}

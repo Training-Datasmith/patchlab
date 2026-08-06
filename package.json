@@ -1,0 +1,40 @@
+{
+  "name": "patchlab",
+  "version": "0.1.0",
+  "description": "Isolated sandbox laboratory for creating patches to optionally merge back to the source",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "patchlab": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "node scripts/run-tests.mjs",
+    "test:unit": "vitest run --project unit",
+    "test:coverage": "vitest run --coverage",
+    "test:posix": "node scripts/test-posix.mjs",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.tests.json",
+    "typecheck:tests": "tsc -p tsconfig.tests.json"
+  },
+  "keywords": [
+    "patch",
+    "sandbox",
+    "diff",
+    "code-generation"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^14.0.3",
+    "glob": "^13.0.6",
+    "picomatch": "^4.0.4",
+    "yaml": "^2.8.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.2",
+    "@types/picomatch": "^4.0.3",
+    "@vitest/coverage-v8": "^4.1.8",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
+  }
+}

@@ -1,0 +1,14 @@
+# Example user-global language detector — copy to ~/.patchlab/languages/go.yaml
+#
+# Suggests a Go base image, pinning the minor version from the `go` directive
+# in go.mod (e.g. `go 1.22` -> golang:1.22). Falls back to default_image when
+# go.mod has no parseable `go` directive.
+language: Go
+marker: go.mod
+default_image: golang:1.22
+version:
+  strategy: regex
+  # The `go` directive is not the first line of go.mod (module is); patterns are
+  # compiled with the multiline flag so `^go` anchors to the directive line.
+  pattern: '^go (\d+)\.(\d+)'
+  image_template: 'golang:{1}.{2}'

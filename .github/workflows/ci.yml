@@ -1,0 +1,116 @@
+# Continuous integration for patchlab.
+#
+# Public-repo GitHub Actions usage is unmetered, so this workflow is sized
+# for breadth (multi-OS, sharded integration) rather than minute-frugality.
+#
+# Jobs:
+#   build-and-typecheck — `tsc` over `src/` (the shipped package) and over
+#       `src/` + `test/` (the test-only type-check gate added in
+#       `tsconfig.tests.json`). Fast, OS-independent, no podman needed.
+#   test-unit — vitest `unit` + `windows` projects, on Ubuntu AND Windows.
+#       The `windows` project self-gates with `process.platform !== 'win32'`
+#       so it is inert on Ubuntu; running it on `windows-latest` is the
+#       only place its assertions actually fire.
+#   test-posix — vitest `posix` project on Ubuntu. The local
+#       `npm run test:posix` script wraps this in a podman container to
+#       borrow Linux filesystem semantics on Windows hosts; on a Linux
+#       runner the indirection is unnecessary — execute the project
+#       natively.
+#   test-integration — vitest `integration` project, sharded across four
+#       runners. See the comment on that job for why CI can parallelize
+#       what a single developer machine cannot.
+#
+# Jobs intentionally do not declare `needs:` dependencies on each other.
+# On a public repo the minute cost is zero, and surfacing every failure
+# in a single run is more useful than failing fast.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded PR builds; main-branch builds run to completion so the
+# branch protection signal is stable.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-and-typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run typecheck:tests
+
+  test-unit:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # Run both projects on both OSes. The `windows` project's assertions
+      # short-circuit on non-Windows, so on Ubuntu this is effectively just
+      # the `unit` project.
+      - run: npx vitest run --project unit --project windows
+
+  test-posix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # Run the posix project directly — `npm run test:posix`'s podman
+      # wrapper is for Windows hosts that need Linux FS semantics. We are
+      # already on Linux.
+      - run: npx vitest run --project posix
+
+  test-integration:
+    # Four-way shard. Local developer machines must run integration files
+    # serially (`fileParallelism: false` in vitest.config.ts) because all
+    # files share one podman daemon and would collide on container names,
+    # image cache writes, and port allocations. GitHub Actions assigns each
+    # matrix job a fresh runner VM with its own podman daemon, so the
+    # shared-state hazard does not cross shard boundaries — within a shard
+    # files still run sequentially, but across shards they run in parallel.
+    #
+    # `vitest --shard=N/4` hashes the test-file paths and selects shard N.
+    # Increasing the shard count past 4 has diminishing returns: per-shard
+    # fixed overhead (runner start, `npm ci`, first-image build) starts to
+    # dominate once each shard holds ~3 files.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # Ubuntu runners ship with podman pre-installed; verify it is callable
+      # before launching the integration suite so a missing-runtime failure
+      # surfaces here rather than as a cryptic test error.
+      - name: Verify podman runtime
+        run: podman --version
+      - run: npx vitest run --project integration --shard=${{ matrix.shard }}/4
