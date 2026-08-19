@@ -267,14 +267,23 @@ async function unapplied_gate_skips(
     repository_root: string,
     options: Delete_Branch_Options | undefined,
 ): Promise<boolean> {
+    const baseline = manifest.baseline_commit_shas[repository_root] ?? null;
+    return unapplied_gate_skips_with_baseline(patchlab_id, repository_root, baseline, options);
+}
+
+async function unapplied_gate_skips_with_baseline(
+    patchlab_id: string,
+    repository_root: string,
+    baseline_commit_sha: string | null,
+    options: Delete_Branch_Options | undefined,
+): Promise<boolean> {
     if (options?.force) {
         return false;
     }
 
-    const baseline = manifest.baseline_commit_shas[repository_root] ?? null;
     let unapplied: string[];
     try {
-        unapplied = unapplied_session_commits(repository_root, patchlab_id, baseline);
+        unapplied = unapplied_session_commits(repository_root, patchlab_id, baseline_commit_sha);
     } catch (error) {
         // Fail closed: a git failure means we cannot prove the session work is
         // applied elsewhere, so refuse to delete rather than risk destroying the
@@ -297,4 +306,70 @@ async function unapplied_gate_skips(
 
     // Non-interactive without --force: refuse to delete unapplied work.
     return true;
+}
+
+/**
+ * Delete `patchlab/{id}` in an explicit repository list without a readable
+ * manifest. Baseline SHAs are unknown, so every commit on the branch is
+ * treated as a session commit for the unapplied check — the same semantics
+ * the GC orphan-branch path uses.
+ */
+export async function delete_patchlab_branch_in_repositories(
+    patchlab_id: string,
+    repository_roots: readonly string[],
+    options?: Delete_Branch_Options,
+): Promise<Record<string, Delete_Branch_Outcome>> {
+    const outcomes: Record<string, Delete_Branch_Outcome> = {};
+    const branch = patchlab_branch_name(patchlab_id);
+
+    for (const repository_root of repository_roots) {
+        try {
+            outcomes[repository_root] = await delete_branch_in_one_repository_without_manifest(
+                patchlab_id,
+                repository_root,
+                branch,
+                options,
+            );
+        } catch (error) {
+            logger().warn(
+                `Branch deletion failed in ${repository_root}: `
+                + `${error instanceof Error ? error.message : String(error)}. `
+                + `Leaving its branch in place and continuing with the remaining repositories.`
+            );
+            outcomes[repository_root] = 'skipped';
+        }
+    }
+
+    return outcomes;
+}
+
+async function delete_branch_in_one_repository_without_manifest(
+    patchlab_id: string,
+    repository_root: string,
+    branch: string,
+    options: Delete_Branch_Options | undefined,
+): Promise<Delete_Branch_Outcome> {
+    let valid = false;
+    try {
+        if (fs.existsSync(repository_root)) {
+            get_repository_root(repository_root);
+            valid = true;
+        }
+    } catch (_not_a_git_repository) {
+        valid = false;
+    }
+    if (!valid) {
+        return 'error';
+    }
+
+    if (!patchlab_branch_exists(repository_root, patchlab_id)) {
+        return 'missing';
+    }
+
+    if (await unapplied_gate_skips_with_baseline(patchlab_id, repository_root, null, options)) {
+        return 'skipped';
+    }
+
+    run_git(['branch', '-D', branch], { cwd: repository_root });
+    return 'deleted';
 }

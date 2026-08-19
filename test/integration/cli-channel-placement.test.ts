@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { cli_subprocess_env } from '../helpers/home_directory.js';
 
 /**
  * End-to-end channel-placement integration tests. Spawns the built CLI
@@ -17,7 +18,7 @@ import * as os from 'node:os';
  * lands where."
  *
  * Build dependency: assumes `npm run build` has produced `dist/cli.js`. The
- * existing integration setup (`setup-podman.ts`) ensures Podman is running,
+ * existing integration setup (`set-up-podman.ts`) ensures Podman is running,
  * which the CLI's `preAction` hook requires for non-`apply` commands.
  *
  * HOME isolation: the patchlab sandbox archive lives under `~/.patchlab/`.
@@ -37,9 +38,7 @@ interface Spawn_Result {
 function run_cli(home_directory: string, command_arguments: string[]): Spawn_Result {
     const result = spawnSync(process.execPath, [CLI_PATH, ...command_arguments], {
         env: {
-            ...process.env,
-            HOME: home_directory,
-            USERPROFILE: home_directory,
+            ...cli_subprocess_env(home_directory),
             // Force the CLI to skip its TTY prompts so the test is deterministic.
             // Apply's --force flag covers `apply`; for create-style flows we
             // simply avoid commands that need TTY input in these tests.

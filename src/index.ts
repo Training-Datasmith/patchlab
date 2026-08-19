@@ -87,9 +87,9 @@ export type { Service_Mapping } from './services.js';
 export { resolve_socket_mount, prompt_service_selection } from './prompts.js';
 export type { Prompter, Socket_Mount_Resolution, Service_Selection } from './prompts.js';
 
-// Podman (container-runtime wrappers)
-export { query_running_containers } from './podman.js';
-export type { Running_Container } from './podman.js';
+// Container runtime
+export { query_running_containers } from './container_runtime.js';
+export type { Running_Container } from './container_runtime.js';
 
 // Stale image detection
 export { get_image_capabilities, check_stale_image } from './stale.js';
@@ -99,5 +99,22 @@ export type { Stale_Check_Result } from './stale.js';
 export type { Sandbox_Manifest } from './manifest.js';
 
 // Tool providers
-export { register_provider, get_provider, list_providers } from './tools/index.js';
-export type { Authentication_Method, Authentication_Result, Tool_Provider } from './tools/index.js';
+export {
+    HOST_PATCHLAB_INTERNAL,
+    register_provider,
+    get_provider,
+    list_providers,
+} from './tools/index.js';
+export type {
+    Authentication_Method,
+    Authentication_Result,
+    Host_Access_Plan,
+    Host_File_Copy,
+    Image_Specification,
+    Launch_Context,
+    Prepare_Host_Access_Context,
+    Prompt_Launch_Context,
+    Prompt_Passthrough_Capability,
+    Tool_Provider,
+} from './tools/index.js';
+export type { Extractable_Artifact } from './extractable_artifact.js';

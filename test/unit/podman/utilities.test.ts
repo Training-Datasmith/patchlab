@@ -8,7 +8,7 @@ vi.mock('node:child_process', () => ({
 }));
 
 import { execFileSync } from 'node:child_process';
-import { get_image_tool_state, create_container, install_package } from '../../../src/podman.js';
+import { get_image_tool_state, create_container, install_package } from '../../../src/container_runtime.js';
 import { assert_present } from '../../helpers/assert_present.js';
 
 const mocked_exec = vi.mocked(execFileSync);

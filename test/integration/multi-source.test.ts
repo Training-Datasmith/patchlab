@@ -27,6 +27,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { execFileSync } from 'node:child_process';
+import { exec_runtime_cli } from '../helpers/exec_runtime_cli.js';
 import {
     create_sandbox,
     resume_sandbox,
@@ -37,7 +38,7 @@ import { read_manifest, manifest_primary_source } from '../../src/manifest.js';
 import {
     container_exists,
     exec_container,
-} from '../../src/podman.js';
+} from '../../src/container_runtime.js';
 import { build_archive_path, get_repository_root } from '../../src/archive.js';
 import { patchlab_branch_name, commit_session_to_branch } from '../../src/branch/index.js';
 import { DEFAULT_TEST_TOOL } from '../helpers/stub_tool_provider.js';
@@ -254,8 +255,7 @@ describe('multi-source patchlab — resume (task 6.5)', () => {
         // resume failure ("container name already in use") OR as the
         // post-resume ID matching the prior ID.
         const prior_container_name = manifest.container_name;
-        const prior_container_id = execFileSync(
-            'podman',
+        const prior_container_id = exec_runtime_cli(
             ['container', 'inspect', '--format', '{{.Id}}', prior_container_name],
             { stdio: 'pipe' },
         ).toString('utf-8').trim();
@@ -269,8 +269,7 @@ describe('multi-source patchlab — resume (task 6.5)', () => {
         // Container at the prior name exists (resume reuses the name) but
         // is a DIFFERENT container instance — its ID changed.
         expect(container_exists(resumed.container_name)).toBe(true);
-        const post_resume_container_id = execFileSync(
-            'podman',
+        const post_resume_container_id = exec_runtime_cli(
             ['container', 'inspect', '--format', '{{.Id}}', resumed.container_name],
             { stdio: 'pipe' },
         ).toString('utf-8').trim();

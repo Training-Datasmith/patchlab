@@ -25,6 +25,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import {
     register_per_source_manifests,
+    resolve_tool_launch_command,
 } from '../../../../src/tools/index.js';
 import {
     _reset_registry,
@@ -89,6 +90,22 @@ authentication:
 launch_command:
   - foo
   - --no-color
+`;
+
+const FOO_PROMPT_MANIFEST_YAML = `name: foo-prompt
+display_name: Foo Prompt
+image_user: patchlab
+base_image: docker.io/library/python:3.12-slim
+base_family: debian
+package_manager: apt
+authentication:
+  method: none
+launch_command:
+  - foo
+prompt_launch_command:
+  - foo
+  - --message
+  - '{{prompt}}'
 `;
 
 describe('end-to-end per-source dispatch (task 6.14, integration-equivalent)', () => {
@@ -172,6 +189,33 @@ describe('end-to-end per-source dispatch (task 6.14, integration-equivalent)', (
             manifest_path: path.join(source_path, '.patchlab', 'tools', 'foo.yaml'),
             source_path,
         });
+    });
+
+    it('resolves prompt argv from a per-source manifest with prompt_launch_command', async () => {
+        const prompt_tools_directory = path.join(source_path, '.patchlab', 'tools');
+        fs.writeFileSync(
+            path.join(prompt_tools_directory, 'foo-prompt.yaml'),
+            FOO_PROMPT_MANIFEST_YAML,
+        );
+
+        const registration_result = register_per_source_manifests([source_path]);
+        expect(registration_result.errors).toHaveLength(0);
+
+        await verify_per_source_trust(
+            source_path,
+            registration_result.manifest_buffers,
+            registration_result.registered_manifests,
+            registration_result.errors,
+            {
+                prompter: inline_prompter(async () => true),
+                output_warn: () => { /* silent */ },
+            },
+        );
+
+        const provider = get_provider('foo-prompt');
+        expect(resolve_tool_launch_command(provider, 'hello')).toEqual([
+            'foo', '--message', 'hello',
+        ]);
     });
 
     it('a second register+verify with the marker present short-circuits the prompt', async () => {

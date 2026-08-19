@@ -37,7 +37,12 @@ export class Readline_Prompter implements Prompter {
         });
     }
 
-    public choose(message: string, options: string[]): Promise<number | null> {
+    public choose(
+        message: string,
+        options: string[],
+        choose_options?: { cancel_label?: string },
+    ): Promise<number | null> {
+        const cancel_label = choose_options?.cancel_label ?? 'None';
         const readline_interface = readline.createInterface({ input: process.stdin, output: process.stderr });
 
         return new Promise((resolve) => {
@@ -45,7 +50,7 @@ export class Readline_Prompter implements Prompter {
                 logger().info(`  ${i + 1}. ${options[i]}`);
             }
 
-            logger().info(`  ${options.length + 1}. None`);
+            logger().info(`  ${options.length + 1}. ${cancel_label}`);
             readline_interface.question(message, (answer) => {
                 readline_interface.close();
                 const parsed_number = Number.parseInt(answer.trim(), 10);

@@ -66,6 +66,14 @@ export function get_provider(name: string): Tool_Provider {
 }
 
 /**
+ * Returns whether a provider name is currently registered. Read-only probe for
+ * default-tool validation before prompting.
+ */
+export function is_provider_registered(name: string): boolean {
+    return providers.has(name);
+}
+
+/**
  * Return all currently registered provider names. Order is registration
  * order; built-ins typically come first because `src/tools/index.ts`
  * registers them at module load before any user-global discovery runs.

@@ -29,6 +29,8 @@ describe('apply_snake_case_option_naming', () => {
         expect(new Option('--older-than <days>').attributeName()).toBe('older_than');
         expect(new Option('--allow-untrusted-manifests').attributeName())
             .toBe('allow_untrusted_manifests');
+        expect(new Option('--allow-untrusted-default-tool').attributeName())
+            .toBe('allow_untrusted_default_tool');
     });
 
     it('leaves single-word flags unchanged', () => {

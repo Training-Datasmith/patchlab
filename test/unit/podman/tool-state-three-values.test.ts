@@ -43,12 +43,12 @@ const state = vi.hoisted((): Tool_State_Mock_State => ({
     create_container_calls: [] as Create_Container_Call[],
 }));
 
-vi.mock('../../../src/podman.js', async (importOriginal) => {
+vi.mock('../../../src/container_runtime.js', async (importOriginal) => {
     const { build_tool_state_podman_mock } = await import('../../helpers/podman_mock_tool_state.js');
     return build_tool_state_podman_mock(state, importOriginal);
 });
 
-import { was_authentication_attempted_at_build, get_image_tool_state } from '../../../src/podman.js';
+import { was_authentication_attempted_at_build, get_image_tool_state } from '../../../src/container_runtime.js';
 import { install_sandbox_cleanup_hooks } from '../../helpers/sandbox_cleanup.js';
 
 const mock_get_image_tool_state = get_image_tool_state as ReturnType<typeof vi.fn>;

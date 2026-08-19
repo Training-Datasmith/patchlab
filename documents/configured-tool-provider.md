@@ -52,6 +52,9 @@ authentication:                                  # required
 
 launch_command: [<string>, ...]                  # required, argv to launch the tool
 
+prompt_launch_command: [<string>, ...]           # optional; enables patchlab -p/--prompt
+prompt_resume_launch_command: [<string>, ...]    # optional; resume -p override (requires prompt_launch_command)
+
 validation:                                      # optional
   command: [<string>, ...]                       # argv that exits 0 when the image is valid
 
@@ -84,6 +87,8 @@ Unknown top-level fields are rejected at parse time.
 | `authentication.variable_names` | non-empty list when `method: environment_variables` |
 | `authentication.copies` | non-empty list of `{ host, container }` when `method: file_copy` |
 | `launch_command` | non-empty list of strings |
+| `prompt_launch_command` | optional non-empty list of strings; at least one token must contain the literal `{{prompt}}` placeholder (substituted at launch time). When set, the provider supports `patchlab create|resume -p`. Put `--` before `{{prompt}}` when prompts may start with `-`. |
+| `prompt_resume_launch_command` | optional; same rules as `prompt_launch_command`. Used for `patchlab resume -p` when set; otherwise resume reuses `prompt_launch_command`. Requires `prompt_launch_command`. |
 | `validation.command` | non-empty list of strings (when `validation` is set) |
 | `extractable_artifacts[*].name` | non-empty, no leading/trailing whitespace, no control chars; unique across the array (case-sensitive) |
 | `extractable_artifacts[*].type` | exactly `'file'` or `'directory'` |

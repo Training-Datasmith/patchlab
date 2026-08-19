@@ -16,7 +16,7 @@ import {
 import {
     copy_from_container,
     exec_container,
-} from './podman.js';
+} from './container_runtime.js';
 import type { Tool_Provider } from './tools/types.js';
 
 /**

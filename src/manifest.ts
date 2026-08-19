@@ -387,6 +387,53 @@ export function read_manifest(sandbox_directory: string): Sandbox_Manifest {
 }
 
 /**
+ * Best-effort extraction of repository roots from a manifest file that may be
+ * too corrupt for `read_manifest`. Used by destroy when the archive metadata
+ * cannot be validated but branch cleanup may still be possible with `--force`.
+ */
+export function try_read_manifest_repository_roots(sandbox_directory: string): string[] {
+    const file_path = manifest_path(sandbox_directory);
+    let parsed: unknown;
+    try {
+        parsed = parse_file_as_json(file_path);
+    } catch (_unparseable_json) {
+        return [];
+    }
+
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        return [];
+    }
+
+    const raw = parsed as Partial<Sandbox_Manifest> & Legacy_Manifest_Fields;
+    const roots = new Set<string>();
+
+    if (Array.isArray(raw.sources)) {
+        for (const entry of raw.sources) {
+            if (typeof entry !== 'object' || entry === null) {
+                continue;
+            }
+            const repository_root = (entry as Partial<Source_Specification>).repository_root;
+            if (typeof repository_root === 'string' && repository_root.length > 0) {
+                roots.add(repository_root);
+            }
+        }
+    }
+
+    if (typeof raw.repository_root === 'string' && raw.repository_root.length > 0) {
+        roots.add(raw.repository_root);
+    }
+
+    return distinct_repositories_from_sources(
+        [...roots].map((repository_root) => ({
+            host_path: repository_root,
+            repository_root,
+            source_prefix: '',
+            mount_name: '',
+        })),
+    );
+}
+
+/**
  * Compute the in-memory map-shaped SHA field for a manifest read off disk.
  *
  * - When the new map field is present, use it as-is (legacy field discarded).

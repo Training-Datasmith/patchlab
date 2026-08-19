@@ -10,9 +10,13 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { create_sandbox_from_directory } from '../test_helpers.js';
-import { destroy_sandbox } from '../../src/sandbox/index.js';
-import { DEFAULT_IMAGE } from '../../src/podman.js';
+import { DEFAULT_IMAGE } from '../../src/container_runtime.js';
 import { resolve_podman_socket_path } from '../../src/detect/index.js';
+import { exec_runtime_cli } from '../helpers/exec_runtime_cli.js';
+import {
+    create_integration_cleanup_registry,
+    register_destroy_sandbox,
+} from '../helpers/integration_cleanup.js';
 
 const GIT_ENVIRONMENT = {
     ...process.env,
@@ -28,21 +32,19 @@ interface Container_Mount {
 }
 
 function inspect_mounts(container_name: string): Container_Mount[] {
-    const output = execFileSync(
-        'podman',
+    const output = exec_runtime_cli(
         ['inspect', '--format', '{{json .Mounts}}', container_name],
         { encoding: 'utf-8' },
     );
-    return JSON.parse(output.trim()) as Container_Mount[];
+    return JSON.parse(String(output).trim()) as Container_Mount[];
 }
 
 function inspect_environment(container_name: string): string[] {
-    const output = execFileSync(
-        'podman',
+    const output = exec_runtime_cli(
         ['inspect', '--format', '{{range .Config.Env}}{{println .}}{{end}}', container_name],
         { encoding: 'utf-8' },
     );
-    return output.trim().split('\n').filter((line) => line.length > 0);
+    return String(output).trim().split('\n').filter((line) => line.length > 0);
 }
 
 function build_podman_detecting_repository(): string {
@@ -59,21 +61,15 @@ function build_podman_detecting_repository(): string {
 }
 
 describe('detect → provisioning socket pipeline', () => {
-    const cleanup: (() => void)[] = [];
+    const cleanup = create_integration_cleanup_registry();
 
-    afterAll(() => {
-        for (const fn of cleanup.toReversed()) {
-            try {
-                fn();
-            } catch {
-                // best-effort
-            }
-        }
+    afterAll(async () => {
+        await cleanup.run_all();
     });
 
     it('mounts the detected podman socket and sets CONTAINER_HOST when allow_socket_mount is true', async () => {
         const source_directory = build_podman_detecting_repository();
-        cleanup.push(() => fs.rmSync(source_directory, { recursive: true, force: true }));
+        cleanup.register(() => fs.rmSync(source_directory, { recursive: true, force: true }));
 
         const expected_socket = resolve_podman_socket_path();
         const manifest = await create_sandbox_from_directory(source_directory, {
@@ -82,9 +78,7 @@ describe('detect → provisioning socket pipeline', () => {
             no_install: true,
             allow_socket_mount: true,
         });
-        cleanup.push(() => {
-            void destroy_sandbox(manifest.id, { force: true });
-        });
+        register_destroy_sandbox(cleanup, manifest.id);
 
         const mounts = inspect_mounts(manifest.container_name);
         const socket_mount = mounts.find((mount) => mount.Destination === '/run/podman/podman.sock');
@@ -97,16 +91,14 @@ describe('detect → provisioning socket pipeline', () => {
 
     it('omits the socket mount when socket approval is not granted', async () => {
         const source_directory = build_podman_detecting_repository();
-        cleanup.push(() => fs.rmSync(source_directory, { recursive: true, force: true }));
+        cleanup.register(() => fs.rmSync(source_directory, { recursive: true, force: true }));
 
         const manifest = await create_sandbox_from_directory(source_directory, {
             image: DEFAULT_IMAGE,
             no_install: true,
             deny_socket_mount: true,
         });
-        cleanup.push(() => {
-            void destroy_sandbox(manifest.id, { force: true });
-        });
+        register_destroy_sandbox(cleanup, manifest.id);
 
         const mounts = inspect_mounts(manifest.container_name);
         expect(mounts.some((mount) => mount.Destination === '/run/podman/podman.sock')).toBe(false);

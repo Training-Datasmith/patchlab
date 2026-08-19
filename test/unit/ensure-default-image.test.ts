@@ -49,7 +49,7 @@ describe('ensure_default_image', () => {
 
         expect(tag).toBe(`patchlab/${DEFAULT_TEST_TOOL}:abc123`);
         expect(mock_build_image).not.toHaveBeenCalled();
-        expect(mock_get_default_image).toHaveBeenCalledWith(DEFAULT_TEST_TOOL, []);
+        expect(mock_get_default_image).toHaveBeenCalledWith(DEFAULT_TEST_TOOL, [], 'node:22-slim');
     });
 
     it('builds a new image when no default is present and returns the freshly built tag', async () => {
@@ -130,6 +130,33 @@ describe('ensure_default_image', () => {
 
         const build_arguments = mock_build_image.mock.calls[0][0];
         expect(build_arguments.tools).toEqual([DEFAULT_TEST_TOOL]);
-        expect(mock_get_default_image).toHaveBeenCalledWith(DEFAULT_TEST_TOOL, []);
+        expect(mock_get_default_image).toHaveBeenCalledWith(DEFAULT_TEST_TOOL, [], 'node:22-slim');
+    });
+
+    it('looks up cached images using the detected language base for bootstrap providers', async () => {
+        fs.writeFileSync(path.join(project_directory, 'pyproject.toml'), '');
+
+        mock_get_default_image.mockReturnValue('patchlab/python-3.12-slim:latest');
+
+        const tag = await ensure_default_image(project_directory, 'opencode');
+
+        expect(tag).toBe('patchlab/python-3.12-slim:latest');
+        expect(mock_get_default_image).toHaveBeenCalledWith('opencode', [], 'python:3.12-slim');
+        expect(mock_build_image).not.toHaveBeenCalled();
+    });
+
+    it('does not reuse a cached image when lookup is scoped to a different detected base', async () => {
+        fs.writeFileSync(path.join(project_directory, 'pyproject.toml'), '');
+
+        mock_get_default_image.mockReturnValue(null);
+        mock_build_image.mockResolvedValue('patchlab/python-3.12-slim:latest');
+
+        await ensure_default_image(project_directory, 'opencode');
+
+        expect(mock_get_default_image).toHaveBeenCalledWith('opencode', [], 'python:3.12-slim');
+        expect(mock_build_image).toHaveBeenCalledWith(expect.objectContaining({
+            base_image: 'python:3.12-slim',
+            tools: ['opencode'],
+        }));
     });
 });

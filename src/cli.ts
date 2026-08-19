@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import * as path from 'node:path';
+import { createRequire } from 'node:module';
 import { Command, InvalidArgumentError } from 'commander';
 import { apply_snake_case_option_naming } from './cli_option_naming.js';
 import {
@@ -17,6 +18,7 @@ import {
     parse_session_number,
     resolve_apply_mode,
     validate_mount_count,
+    collect_passthrough,
 } from './cli_arguments.js';
 import { diff_sandbox } from './changes.js';
 import { format_list_header, format_list_row } from './cli_list.js';
@@ -29,18 +31,22 @@ import {
     resolve_apply_repository,
     type Apply_Result,
 } from './branch/index.js';
-import { assert_valid_patchlab_id, build_archive_path, build_session_path, get_repository_root, read_session_metadata, next_session_number } from './archive.js';
+import { assert_valid_patchlab_id, build_archive_path, build_session_path, get_repository_root, read_session_metadata, latest_session_with_metadata } from './archive.js';
 import { distinct_repositories_from_sources, manifest_primary_source, manifest_repositories, read_manifest, resolve_manifest_tool, type Sandbox_Manifest } from './manifest.js';
 import { resolve_source_inputs, expand_manifest_sources } from './sources.js';
 import { extract_history, extract_conversation, finalize_session_metadata } from './extraction.js';
-import { exec_interactive, ensure_podman } from './podman.js';
+import { exec_interactive, ensure_container_runtime } from './container_runtime.js';
 import { ensure_default_image } from './auto_build.js';
 import {
     get_provider,
     validate_user_global_or_abort,
     register_per_source_manifests,
     compute_container_workspace_path,
+    resolve_create_tool_name,
+    resolve_tool_launch_command,
+    DEFAULT_BUILTIN_TOOL,
 } from './tools/index.js';
+import type { Launch_Context, Tool_Provider } from './tools/types.js';
 import { run_list_tools } from './list_tools.js';
 import {
     verify_per_source_trust_multi_repository,
@@ -48,6 +54,10 @@ import {
     resolve_trust_options_from,
     type Confirm_Per_Source_Options,
 } from './tools/configured_provider/trust_verification.js';
+import {
+    verify_per_source_default_tool,
+    resolve_allow_untrusted_default_tool_from,
+} from './tools/default_tool_trust.js';
 import { build_image, list_images } from './images.js';
 import { detect_project } from './languages/index.js';
 import { detect_requirements, type Detected_Requirements } from './detect/index.js';
@@ -67,6 +77,11 @@ import {
 } from './resource_limits.js';
 import { load_configuration } from './configuration.js';
 import { extract_workspace_copies, type Copy_Specification } from './sandbox/workspace_copies.js';
+import { resolve_prompt_text, Prompt_Input_Error } from './prompt_input.js';
+import {
+    resolve_prompt_file_staging,
+    Prompt_File_Staging_Error,
+} from './context.js';
 
 // =========================================================================
 // Prompt-site audit (structural lock for the isolate-cli-prompter change).
@@ -106,17 +121,195 @@ import { extract_workspace_copies, type Copy_Specification } from './sandbox/wor
 // not reach any prompt site.
 // =========================================================================
 
-function require_cli_tool_name(tool: string | undefined, command: string): string {
-    if (tool === undefined || tool === '') {
+function reject_empty_cli_tool_name(tool: string | undefined, command: string): void {
+    if (tool === '') {
         logger().error(
-            `${command}: --tool is required. `
-            + 'Configure a provider under ~/.patchlab/tools/ or <source>/.patchlab/tools/, '
-            + 'then run `patchlab list-tools` to see available names.',
+            `${command}: --tool must be a non-empty name when provided. `
+            + `Omit --tool to use the default (${DEFAULT_BUILTIN_TOOL}) or configure `
+            + '`default_tool` in ~/.patchlab/configuration.yaml.',
         );
         process.exit(1);
     }
+}
 
-    return tool;
+function validate_prompt_cli_options(
+    command: string,
+    options: { prompt?: string | boolean; interactive?: boolean },
+): void {
+    if (options.prompt !== undefined && options.interactive === false) {
+        logger().error(`${command}: --prompt cannot be used with --no-interactive.`);
+        process.exit(1);
+    }
+}
+
+function resolve_cli_prompt_text_or_exit(command: string, raw: string | boolean | undefined): string | undefined {
+    try {
+        const resolved = resolve_prompt_text(raw);
+        if (resolved !== undefined && resolved.trim() === '') {
+            logger().error(`${command}: --prompt must be a non-empty string.`);
+            process.exit(1);
+        }
+        return resolved;
+    } catch (error) {
+        if (error instanceof Prompt_Input_Error) {
+            logger().error(error.message);
+            process.exit(1);
+        }
+        throw error;
+    }
+}
+
+function validate_prompt_file_cli_options(
+    command: string,
+    prompt: string | undefined,
+    prompt_file: string[] | undefined,
+): void {
+    if (prompt_file !== undefined && prompt_file.length > 0 && prompt === undefined) {
+        logger().error(`${command}: --prompt-file requires -p/--prompt.`);
+        process.exit(1);
+    }
+}
+
+function resolve_tool_launch_command_or_exit(
+    provider: Tool_Provider,
+    prompt: string | undefined,
+    context?: Launch_Context,
+): string[] {
+    try {
+        return resolve_tool_launch_command(provider, prompt, context);
+    } catch (error) {
+        logger().error(error instanceof Error ? error.message : String(error));
+        process.exit(1);
+    }
+}
+
+function resolve_prompt_file_staging_or_exit(
+    command: string,
+    prompt_file_paths: string[],
+    context_paths: string[],
+    image_home: string,
+    base_directory: string,
+): { merged_context_paths: string[]; container_files: string[] } {
+    try {
+        return resolve_prompt_file_staging(
+            prompt_file_paths,
+            context_paths,
+            image_home,
+            base_directory,
+        );
+    } catch (error) {
+        if (error instanceof Prompt_File_Staging_Error) {
+            logger().error(`${command}: ${error.message}`);
+            process.exit(1);
+        }
+        throw error;
+    }
+}
+
+function build_launch_context(options: {
+    passthrough?: string[];
+    container_files?: string[];
+    will_exec: boolean;
+    resume?: boolean;
+}): Launch_Context {
+    const extra_argv = options.passthrough !== undefined && options.passthrough.length > 0
+        ? options.passthrough
+        : undefined;
+    const files = options.container_files !== undefined && options.container_files.length > 0
+        ? options.container_files
+        : undefined;
+    return {
+        resume: options.resume,
+        extra_argv,
+        files,
+        exec: options.will_exec,
+    };
+}
+
+function tool_exec_exit_status(error: unknown): number {
+    return error instanceof Error && 'status' in error
+        ? (error as { status?: number }).status ?? 1
+        : 1;
+}
+
+async function launch_tool_and_extract(options: {
+    container_name: string;
+    launch_command: string[];
+    working_directory: string;
+    manifest: Sandbox_Manifest;
+    prompter: Prompter | null;
+    propagate_tool_exit_code: boolean;
+    provider?: Tool_Provider;
+    prompt?: string;
+    launch_context?: Launch_Context;
+}): Promise<void> {
+    let tool_status: number | undefined;
+    let first_run_succeeded = false;
+    try {
+        exec_interactive(options.container_name, options.launch_command, options.working_directory);
+        first_run_succeeded = true;
+    } catch (error) {
+        if (options.propagate_tool_exit_code) {
+            tool_status = tool_exec_exit_status(error);
+        } else {
+            const code = error instanceof Error && 'status' in error
+                ? (error as { status?: number }).status
+                : undefined;
+            const suffix = code ? ' with code ' + code : '';
+            logger().info('Shell exited' + suffix + '.');
+        }
+    }
+
+    if (first_run_succeeded
+        && options.prompt !== undefined
+        && options.provider?.maybe_prompt_output_followup) {
+        const followup_command = options.provider.maybe_prompt_output_followup(
+            options.container_name,
+            options.working_directory,
+            options.prompt,
+            options.launch_context,
+        );
+        if (followup_command !== null) {
+            try {
+                exec_interactive(
+                    options.container_name,
+                    followup_command,
+                    options.working_directory,
+                );
+                tool_status = undefined;
+                if (options.provider?.maybe_prompt_output_followup) {
+                    const still_missing = options.provider.maybe_prompt_output_followup(
+                        options.container_name,
+                        options.working_directory,
+                        options.prompt,
+                        options.launch_context,
+                    );
+                    if (still_missing !== null) {
+                        logger().warn(
+                            'OpenCode synthesis follow-up completed, but the session export still '
+                            + 'shows no assistant text for the latest user turn.'
+                        );
+                    }
+                }
+            } catch (error) {
+                if (options.propagate_tool_exit_code) {
+                    tool_status = tool_exec_exit_status(error);
+                } else {
+                    const code = error instanceof Error && 'status' in error
+                        ? (error as { status?: number }).status
+                        : undefined;
+                    const suffix = code ? ' with code ' + code : '';
+                    logger().info('Shell exited' + suffix + '.');
+                }
+            }
+        }
+    }
+
+    await extract_session_to_branch(options.manifest, options.working_directory, options.prompter);
+
+    if (options.propagate_tool_exit_code && tool_status !== undefined) {
+        process.exitCode = tool_status;
+    }
 }
 
 /**
@@ -128,13 +321,20 @@ function require_cli_tool_name(tool: string | undefined, command: string): strin
  *
  * Each step is best-effort up through commit; if commit fails catastrophically,
  * the session is marked `interrupted` so prior captures are preserved.
+ *
+ * Exported for unit tests.
  */
-async function extract_session_to_branch(
+export async function extract_session_to_branch(
     manifest: Sandbox_Manifest,
     working_directory: string,
     prompter: Prompter | null,
 ): Promise<void> {
-    const session_number = next_session_number(manifest.id) - 1;
+    const session_number = latest_session_with_metadata(manifest.id);
+    if (session_number === null) {
+        logger().warn('No session with metadata found; cannot extract session. Skipping.');
+        return;
+    }
+
     const primary_repository = manifest_primary_source(manifest).repository_root;
     const meta = read_session_metadata(manifest.id, session_number);
     if (!meta) {
@@ -393,12 +593,14 @@ function load_configuration_or_exit(repository_roots: readonly string[]): Return
 // cli_option_naming.ts for the mechanism and its caveats.
 apply_snake_case_option_naming();
 
+const package_version = createRequire(__filename)('../package.json').version as string;
+
 const program = new Command();
 
 program
     .name('patchlab')
     .description('Isolated container sandbox for creating patches')
-    .version('0.1.0')
+    .version(package_version)
     .option('--verbose', 'enable verbose diagnostic output (also: PATCHLAB_VERBOSE env var; CLI flag wins)')
     .option(
         '--strict-trust',
@@ -411,6 +613,12 @@ program
         'Override the strict-by-default non-TTY abort for per-source configured providers — proceeds without prompting in non-TTY contexts. '
         + 'CI opt-in. Marker file is NOT written, so subsequent interactive runs still prompt. '
         + 'Also settable via PATCHLAB_ALLOW_UNTRUSTED_MANIFESTS=1. Mutually exclusive with --strict-trust.',
+    )
+    .option(
+        '--allow-untrusted-default-tool',
+        'Override the strict-by-default non-TTY abort when a repository default_tool conflicts with your usual tool — '
+        + 'applies the repository value for this invocation without writing a preference. '
+        + 'Also settable via PATCHLAB_ALLOW_UNTRUSTED_DEFAULT_TOOL=1.',
     )
     .hook('preAction', async (_thisCommand, actionCommand) => {
         // Internal end-to-end witness for the `--verbose` and
@@ -437,7 +645,7 @@ program
             // Single TTY-detection site for the preAction-gated commands;
             // ensure_podman threads the prompter into its private
             // start_or_recover_machine helper. See cli_prompter.ts.
-            await ensure_podman(resolve_runtime_prompter());
+            await ensure_container_runtime(resolve_runtime_prompter());
         }
     });
 
@@ -452,6 +660,14 @@ function resolve_trust_options(prompter: Prompter | null): Confirm_Per_Source_Op
     );
 
     return { ...base, prompter };
+}
+
+function resolve_allow_untrusted_default_tool(): boolean {
+    const program_options = program.opts() as { allow_untrusted_default_tool?: boolean };
+    return resolve_allow_untrusted_default_tool_from(
+        { allow_untrusted_default_tool: program_options.allow_untrusted_default_tool === true },
+        process.env,
+    );
 }
 
 program
@@ -469,8 +685,11 @@ program
     .option('--deny-socket-mount', 'Deny socket mount without prompting')
     .option('--allow-submodules', 'Proceed when any source repository contains git submodules (submodule contents are treated as regular files; apply conflicts may result)')
     .option('--allow-dirty-tree', 'Proceed when the host working tree is dirty (uncommitted changes are captured as a labeled baseline commit on the patchlab branch)')
-    .option('--tool <name>', 'AI coding tool to use (required). Accepts user-global configured providers from ~/.patchlab/tools/*.yaml and per-source configured providers from <repository_root>/.patchlab/tools/*.yaml (subject to host-path containment and a first-encounter trust prompt — see --strict-trust / --allow-untrusted-manifests and documents/configuration-based-providers.md). Run `patchlab list-tools` to see available providers')
+    .option('--tool <name>', `AI coding tool to use (default: ${DEFAULT_BUILTIN_TOOL}, or default_tool in ~/.patchlab/configuration.yaml). Accepts user-global configured providers from ~/.patchlab/tools/*.yaml and per-source configured providers from <repository_root>/.patchlab/tools/*.yaml (subject to host-path containment and a first-encounter trust prompt — see --strict-trust / --allow-untrusted-manifests and documents/configuration-based-providers.md). Run \`patchlab list-tools\` to see available providers`)
     .option('--no-interactive', 'Skip interactive AI tool launch (for scripts/tests)')
+    .option('-p, --prompt [text]', 'Run a one-shot prompt via the tool provider; omit text or use -p - to read stdin')
+    .option('--passthrough <token>', 'Forward an argv token to the tool launch command (repeatable; use --passthrough=--flag for flag-like tokens)', collect_passthrough, [] as string[])
+    .option('--prompt-file <path>', 'Attach a host file to a prompt launch via context staging (repeatable; requires -p)', collect_repeatable_source, [] as string[])
     .option('--context <paths...>', 'Files or directories to inject into $HOME/context/ in the sandbox')
     .option('--copy <source[:destination]>', 'Copy a host file or directory into the sandbox workspace (repeatable; secret-pattern files are not blocked but a warning is emitted)',
         (value, previous: Copy_Specification[]) => previous.concat([parse_copy_specification(value)]), [] as Copy_Specification[])
@@ -504,6 +723,9 @@ export async function handle_create_command(
         allow_dirty_tree?: boolean;
         interactive?: boolean;
         tool?: string;
+        prompt?: string | boolean;
+        passthrough?: string[];
+        prompt_file?: string[];
         context?: string[];
         copy?: Copy_Specification[];
         include_secrets?: boolean;
@@ -517,7 +739,10 @@ export async function handle_create_command(
     // Single prompter for this command action; threaded into every
     // prompt-issuing call site below. See cli_prompter.ts.
     const prompter = resolve_runtime_prompter();
-    const tool_name = require_cli_tool_name(options.tool, 'patchlab create');
+    reject_empty_cli_tool_name(options.tool, 'patchlab create');
+    validate_prompt_cli_options('patchlab create', options);
+    const resolved_prompt = resolve_cli_prompt_text_or_exit('patchlab create', options.prompt);
+    validate_prompt_file_cli_options('patchlab create', resolved_prompt, options.prompt_file);
     // Resolve sources into validated `Source_Specification[]`. Two paths:
     //
     // CLI path: any of the positional <source>, --source, or --mount flags
@@ -591,8 +816,52 @@ export async function handle_create_command(
     const registration_result = register_per_source_manifests(
         distinct_repositories,
     );
+
+    const cli_resource_overrides: CLI_Limit_Overrides = {
+        memory_limit: options.memory,
+        cpu_limit: options.cpus,
+        pids_limit: options.pids_limit,
+        blkio_weight: options.blkio_weight,
+    };
+
+    const loaded_configuration = load_configuration_or_exit(
+        distinct_repositories,
+    );
+    const default_tool_override = options.tool === undefined
+        ? (await verify_per_source_default_tool(
+            distinct_repositories,
+            loaded_configuration,
+            {
+                prompter,
+                allow_untrusted_default_tool: resolve_allow_untrusted_default_tool(),
+            },
+        )).override
+        : undefined;
+    const tool_name = resolve_create_tool_name(
+        options.tool,
+        loaded_configuration,
+        default_tool_override,
+    );
     const provider = get_provider(tool_name);
     const primary_host_path = sources[0].host_path;
+    const will_exec = options.interactive !== false;
+    const passthrough = options.passthrough ?? [];
+    const prompt_file_staging = resolve_prompt_file_staging_or_exit(
+        'patchlab create',
+        options.prompt_file ?? [],
+        options.context ?? [],
+        provider.image_specification.image_home,
+        primary_host_path,
+    );
+    const launch_context = build_launch_context({
+        passthrough,
+        container_files: prompt_file_staging.container_files,
+        will_exec,
+    });
+    const needs_launch_preflight = resolved_prompt !== undefined || passthrough.length > 0;
+    const precomputed_launch_command = needs_launch_preflight
+        ? resolve_tool_launch_command_or_exit(provider, resolved_prompt, launch_context)
+        : undefined;
     // Verify per-source manifest trust BEFORE building any image. A per-source
     // provider's `dockerfile.install` lines run as `RUN` directives during
     // `ensure_default_image`'s `podman build`, and the trust prompt discloses
@@ -608,27 +877,11 @@ export async function handle_create_command(
         registration_result.errors,
         trust_options,
     );
+    const prompt_launch_command = precomputed_launch_command;
     const image = options.image ?? await ensure_default_image(primary_host_path, tool_name);
     if (!options.image) {
         logger().info(`Using image: ${image}`);
     }
-
-    const cli_resource_overrides: CLI_Limit_Overrides = {
-        memory_limit: options.memory,
-        cpu_limit: options.cpus,
-        pids_limit: options.pids_limit,
-        blkio_weight: options.blkio_weight,
-    };
-
-    // Load both configuration files once per invocation; thread the
-    // result through to create_sandbox so the resolver can apply the
-    // user-global and per-source-clamped layers. Load errors abort with
-    // a non-zero exit BEFORE any sandbox/container work begins. The
-    // per-source configuration file lives under repository_root, not
-    // under any individual source path.
-    const loaded_configuration = load_configuration_or_exit(
-        distinct_repositories,
-    );
 
     const manifest = await create_sandbox(sources, {
         include: options.include,
@@ -641,7 +894,7 @@ export async function handle_create_command(
         deny_socket_mount: options.deny_socket_mount,
         allow_submodules: options.allow_submodules,
         allow_dirty_tree: options.allow_dirty_tree,
-        context_paths: options.context,
+        context_paths: prompt_file_staging.merged_context_paths,
         copy_paths: options.copy,
         include_secret_files: options.include_secrets,
         composer_path_repositories: options.composer_path_repositories,
@@ -650,6 +903,7 @@ export async function handle_create_command(
         prompter,
         strict_trust: trust_options.strict_trust,
         allow_untrusted_manifests: trust_options.allow_untrusted_manifests,
+        allow_untrusted_default_tool: resolve_allow_untrusted_default_tool(),
     });
     logger().info(`Patchlab created: ${manifest.id}`);
     logger().info(`Container: ${manifest.container_name}`);
@@ -661,18 +915,19 @@ export async function handle_create_command(
     }
 
     const working_directory = compute_container_workspace_path(provider);
-    try {
-        exec_interactive(manifest.container_name, provider.get_launch_command(), working_directory);
-    } catch (error) {
-        const code = error instanceof Error && 'status' in error
-            ? (error as { status?: number }).status
-            : undefined;
-        const suffix = code ? ' with code ' + code : '';
-        logger().info('Shell exited' + suffix + '.');
-    }
-
-    // Auto-extract: commit changes to the patchlab branch.
-    await extract_session_to_branch(manifest, working_directory, prompter);
+    const launch_command = prompt_launch_command
+        ?? resolve_tool_launch_command_or_exit(provider, undefined, launch_context);
+    await launch_tool_and_extract({
+        container_name: manifest.container_name,
+        launch_command,
+        working_directory,
+        manifest,
+        prompter,
+        propagate_tool_exit_code: resolved_prompt !== undefined,
+        provider,
+        prompt: resolved_prompt,
+        launch_context,
+    });
 }
 
 program
@@ -736,9 +991,26 @@ export async function handle_destroy_command(
     });
     const outcome_keys = Object.keys(result.branch_outcomes);
     if (outcome_keys.length <= 1) {
-        // Single-repository (or unreadable-manifest) destroy retains
-        // the legacy single-line message for backwards-compatibility.
-        logger().info(`Patchlab destroyed: ${sandbox_id}`);
+        if (result.archive_removed) {
+            logger().info(`Patchlab destroyed: ${sandbox_id}`);
+            return;
+        }
+
+        if (result.manifest_unreadable) {
+            logger().warn(
+                `Patchlab ${sandbox_id} was not fully destroyed because its manifest is unreadable. `
+                + `The archive at ~/.patchlab/${sandbox_id}/ and any patchlab branches were left intact. `
+                + `Repair the manifest or re-run \`patchlab destroy ${sandbox_id} --force\`.`
+            );
+            return;
+        }
+
+        logger().warn(
+            `Patchlab ${sandbox_id} was not fully destroyed; the archive at `
+            + `~/.patchlab/${sandbox_id}/ was retained. `
+            + `Re-run \`patchlab destroy ${sandbox_id} --force\` to clear skipped branches, `
+            + `or manually run \`git branch -D patchlab/${sandbox_id}\` in each skipped repository.`
+        );
         return;
     }
 
@@ -935,6 +1207,9 @@ program
     .argument('<patchlab>', 'Patchlab identifier')
     .option('--no-install', 'Skip automatic dependency install')
     .option('--no-interactive', 'Skip interactive AI tool launch (for scripts/tests)')
+    .option('-p, --prompt [text]', 'Run a one-shot prompt via the tool provider; omit text or use -p - to read stdin')
+    .option('--passthrough <token>', 'Forward an argv token to the tool launch command (repeatable; use --passthrough=--flag for flag-like tokens)', collect_passthrough, [] as string[])
+    .option('--prompt-file <path>', 'Attach a host file to a prompt launch via context staging (repeatable; requires -p)', collect_repeatable_source, [] as string[])
     .option('--context <paths...>', 'Additional context files to merge with the previous session\'s context')
     .option('--copy <source[:destination]>', 'Copy a host file or directory into the sandbox workspace (repeatable; merged with previous session\'s copies; secret-pattern files are not blocked but a warning is emitted)',
         (value, previous: Copy_Specification[]) => previous.concat([parse_copy_specification(value)]), [] as Copy_Specification[])
@@ -955,6 +1230,9 @@ export async function handle_resume_command(
     options: {
         install?: boolean;
         interactive?: boolean;
+        prompt?: string | boolean;
+        passthrough?: string[];
+        prompt_file?: string[];
         context?: string[];
         copy?: Copy_Specification[];
         memory?: CLI_Limit_Overrides['memory_limit'];
@@ -964,6 +1242,9 @@ export async function handle_resume_command(
     },
 ): Promise<void> {
     assert_valid_patchlab_id(patchlab_id);
+    validate_prompt_cli_options('patchlab resume', options);
+    const resolved_prompt = resolve_cli_prompt_text_or_exit('patchlab resume', options.prompt);
+    validate_prompt_file_cli_options('patchlab resume', resolved_prompt, options.prompt_file);
     // Single prompter for this command action; threaded into trust verify,
     // the two confirm_* callbacks below, and the post-resume extract step.
     const prompter = resolve_runtime_prompter();
@@ -986,14 +1267,50 @@ export async function handle_resume_command(
         manifest_repositories(resume_manifest),
     );
 
+    // Per-source registration MUST run before `get_provider` — otherwise a
+    // manifest tool name that exists only under <repository>/.patchlab/tools/
+    // fails with "unknown tool". `resume_sandbox` registers again internally
+    // (idempotent); this call covers prompt-file staging and launch preflight.
+    register_per_source_manifests(manifest_repositories(resume_manifest));
+
+    const tool_name = resolve_manifest_tool(resume_manifest);
+    const provider = get_provider(tool_name);
+    const primary_host_path = manifest_primary_source(resume_manifest).host_path;
+    const will_exec = options.interactive !== false;
+    const passthrough = options.passthrough ?? [];
+    const prompt_file_staging = resolve_prompt_file_staging_or_exit(
+        'patchlab resume',
+        options.prompt_file ?? [],
+        options.context ?? [],
+        provider.image_specification.image_home,
+        primary_host_path,
+    );
+    const launch_context = build_launch_context({
+        passthrough,
+        container_files: prompt_file_staging.container_files,
+        will_exec,
+        resume: true,
+    });
+    const needs_launch_preflight = resolved_prompt !== undefined || passthrough.length > 0;
+
+    let precomputed_launch_command: string[] | undefined;
     const manifest = await resume_sandbox(patchlab_id, {
         no_install: options.install === false,
-        context_paths: options.context,
+        context_paths: prompt_file_staging.merged_context_paths,
         copy_paths: options.copy,
         trust_options: resolve_trust_options(prompter),
         cli_resource_overrides,
         loaded_configuration,
         prompter,
+        provider_preflight: needs_launch_preflight
+            ? (preflight_provider) => {
+                precomputed_launch_command = resolve_tool_launch_command_or_exit(
+                    preflight_provider,
+                    resolved_prompt,
+                    launch_context,
+                );
+            }
+            : undefined,
     });
     logger().info(`Patchlab resumed: ${manifest.id}`);
     logger().info(`Container: ${manifest.container_name}`);
@@ -1003,20 +1320,21 @@ export async function handle_resume_command(
         return;
     }
 
-    const tool_name = resolve_manifest_tool(manifest);
-    const provider = get_provider(tool_name);
-    const working_directory = compute_container_workspace_path(provider);
-    try {
-        exec_interactive(manifest.container_name, provider.get_launch_command(), working_directory);
-    } catch (error) {
-        const code = error instanceof Error && 'status' in error
-            ? (error as { status?: number }).status
-            : undefined;
-        const suffix = code ? ' with code ' + code : '';
-        logger().info('Shell exited' + suffix + '.');
-    }
-
-    await extract_session_to_branch(manifest, working_directory, prompter);
+    const resumed_provider = get_provider(resolve_manifest_tool(manifest));
+    const working_directory = compute_container_workspace_path(resumed_provider);
+    const launch_command = precomputed_launch_command
+        ?? resolve_tool_launch_command_or_exit(resumed_provider, undefined, launch_context);
+    await launch_tool_and_extract({
+        container_name: manifest.container_name,
+        launch_command,
+        working_directory,
+        manifest,
+        prompter,
+        propagate_tool_exit_code: resolved_prompt !== undefined,
+        provider: resumed_provider,
+        prompt: resolved_prompt,
+        launch_context,
+    });
 }
 
 program

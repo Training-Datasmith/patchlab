@@ -1,5 +1,5 @@
-import { execFileSync } from 'node:child_process';
 import * as crypto from 'node:crypto';
+import { exec_runtime, read_image_label } from './container_runtime.js';
 import { logger } from './logger.js';
 
 /**
@@ -78,17 +78,9 @@ for (const [capability, packages] of Object.entries(CAPABILITY_TABLE)) {
 /** Detect the package manager in a container image. Checks cached label first, falls back to binary inspection. */
 export function detect_package_manager(image: string): Package_Manager {
     // Check cached label first
-    try {
-        const result = execFileSync(
-            'podman',
-            ['image', 'inspect', '--format', '{{index .Labels "biz.ecartz.patchlab.package_manager"}}', image],
-            { stdio: 'pipe' }
-        ).toString('utf-8').trim();
-        if (result === 'apt' || result === 'apk' || result === 'dnf') {
-            return result;
-        }
-    } catch (_image_label_inspect_failed) {
-        // No label or inspect failed, fall through to binary detection
+    const cached = read_image_label(image, 'biz.ecartz.patchlab.package_manager');
+    if (cached === 'apt' || cached === 'apk' || cached === 'dnf') {
+        return cached;
     }
 
     // Disambiguate by pid + random suffix, not wall-clock alone: two probes
@@ -103,8 +95,8 @@ export function detect_package_manager(image: string): Package_Manager {
         // `patchlab resume`. The probe runs `sleep infinity`, so its idle
         // resource footprint is negligible — applying caps here would add
         // failure modes without changing the practical behavior.
-        execFileSync('podman', ['create', '--name', container_name, image, 'sleep', 'infinity'], { stdio: 'pipe' });
-        execFileSync('podman', ['start', container_name], { stdio: 'pipe' });
+        exec_runtime(['create', '--name', container_name, image, 'sleep', 'infinity'], { stdio: 'pipe' });
+        exec_runtime(['start', container_name], { stdio: 'pipe' });
 
         const checks: { path: string; result: Package_Manager }[] = [
             { path: '/usr/bin/apt-get', result: 'apt' },
@@ -115,10 +107,9 @@ export function detect_package_manager(image: string): Package_Manager {
 
         for (const check of checks) {
             try {
-                execFileSync(
-                    'podman',
+                exec_runtime(
                     ['exec', container_name, 'test', '-f', check.path],
-                    { stdio: 'pipe' }
+                    { stdio: 'pipe' },
                 );
                 return check.result;
             } catch (_binary_missing) {
@@ -129,7 +120,7 @@ export function detect_package_manager(image: string): Package_Manager {
         return 'unknown';
     } finally {
         try {
-            execFileSync('podman', ['rm', '-f', container_name], { stdio: 'pipe' });
+            exec_runtime(['rm', '-f', container_name], { stdio: 'pipe' });
         } catch (_probe_container_already_gone) {
             // probe container may already be gone — podman prune will catch stragglers
         }

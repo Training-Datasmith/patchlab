@@ -15,9 +15,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import * as crypto from 'node:crypto';
 import { is_plain_object } from '../../json_validators.js';
 import { atomic_write_file } from '../../safe_filesystem.js';
+import { repository_realpath, repository_state_key } from '../repository_state_key.js';
 
 /**
  * Base directory for per-source trust markers. Honours `PATCHLAB_HOME`
@@ -29,19 +29,8 @@ export function trust_marker_directory(): string {
     return path.join(home, '.patchlab', 'trusted-sources');
 }
 
-function trust_marker_key(repository_root: string): string {
-    let realpath_repository: string;
-    try {
-        realpath_repository = fs.realpathSync(repository_root);
-    } catch (_realpath_failed) {
-        realpath_repository = path.resolve(repository_root);
-    }
-
-    return crypto.createHash('sha256').update(realpath_repository).digest('hex');
-}
-
 export function trust_marker_path(repository_root: string): string {
-    return path.join(trust_marker_directory(), `${trust_marker_key(repository_root)}.json`);
+    return path.join(trust_marker_directory(), `${repository_state_key(repository_root)}.json`);
 }
 
 /**
@@ -88,17 +77,10 @@ export function write_trust_marker(repository_root: string, trusted_hash: string
     const marker_directory = trust_marker_directory();
     fs.mkdirSync(marker_directory, { recursive: true });
     const marker_path = trust_marker_path(repository_root);
-    let realpath_repository: string;
-    try {
-        realpath_repository = fs.realpathSync(repository_root);
-    } catch (_realpath_failed) {
-        realpath_repository = path.resolve(repository_root);
-    }
-
     const body = {
         trusted_hash,
         confirmed_at: new Date().toISOString(),
-        repository_root: realpath_repository,
+        repository_root: repository_realpath(repository_root),
     };
     // Atomic write (see atomic_write_file): a partial-write torn marker would
     // be read as "corrupt" — informationally equivalent to "no marker" — and

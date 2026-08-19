@@ -140,6 +140,42 @@ export function claim_session_number_from(
     );
 }
 
+export function write_claimed_session_metadata(
+    patchlab_id: string,
+    session_number: number,
+    tool_name: string,
+    container_name: string,
+    manifest: Sandbox_Manifest,
+    resolved_limits: ReturnType<typeof resolve_resource_limits>,
+): void {
+    const initial_metadata = make_initial_session_metadata(
+        session_number,
+        tool_name,
+        container_name,
+        manifest_repositories(manifest),
+    );
+    initial_metadata.resource_limits = persisted_resource_limits_to_on_disk(
+        resolved_limits_to_persisted(resolved_limits),
+    );
+    write_session_metadata(patchlab_id, session_number, initial_metadata);
+}
+
+/**
+ * Remove a session directory that was claimed but never received metadata.
+ * Safe to call when metadata already exists (no-op) or the directory is gone.
+ */
+export function discard_unwritten_session(patchlab_id: string, session_number: number): void {
+    const session_directory = build_session_path(patchlab_id, session_number);
+    const metadata_path = path.join(session_directory, 'metadata.json');
+    if (fs.existsSync(metadata_path)) {
+        return;
+    }
+
+    if (fs.existsSync(session_directory)) {
+        fs.rmSync(session_directory, { recursive: true, force: true });
+    }
+}
+
 /**
  * Claim the next free `sessions/{n}/` directory and write the initial
  * `metadata.json` for that session. Called once by `create_sandbox` (session 1)
@@ -154,16 +190,14 @@ export function write_initial_session_metadata(
     resolved_limits: ReturnType<typeof resolve_resource_limits>,
 ): number {
     const session_number = claim_session_directory(patchlab_id);
-    const initial_metadata = make_initial_session_metadata(
+    write_claimed_session_metadata(
+        patchlab_id,
         session_number,
         tool_name,
         container_name,
-        manifest_repositories(manifest),
+        manifest,
+        resolved_limits,
     );
-    initial_metadata.resource_limits = persisted_resource_limits_to_on_disk(
-        resolved_limits_to_persisted(resolved_limits),
-    );
-    write_session_metadata(patchlab_id, session_number, initial_metadata);
     return session_number;
 }
 

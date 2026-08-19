@@ -25,9 +25,10 @@ vi.mock('node:fs', async (original) => {
         existsSync: vi.fn(),
     };
 });
-vi.mock('../../../../src/podman.js', () => ({
+vi.mock('../../../../src/container_runtime.js', () => ({
     copy_to_container: vi.fn(),
     exec_container: vi.fn(),
+    get_runtime_binary: vi.fn(() => 'podman'),
     get_image_home: (user: string) => `/home/${user}`,
     get_working_directory: (user: string) => `/home/${user}/workspace`,
 }));
@@ -37,7 +38,7 @@ vi.mock('../../../../src/symlink_compatibility.js', () => ({
 
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
-import { copy_to_container, exec_container } from '../../../../src/podman.js';
+import { copy_to_container, exec_container } from '../../../../src/container_runtime.js';
 import { find_escape_symlinks } from '../../../../src/symlink_compatibility.js';
 import {
     Configured_Tool_Provider,
@@ -695,6 +696,36 @@ describe('Configured_Tool_Provider (Section 1)', () => {
             const cmd2 = provider.get_launch_command();
             expect(cmd1).toEqual(['aider', '--yes']);
             expect(cmd1).not.toBe(cmd2); // defensive copy, not shared mutable reference
+        });
+
+        it('does not expose get_prompt_launch_command when the manifest omits prompt_launch_command', () => {
+            const provider = new Configured_Tool_Provider(make_manifest(), '/p/x.yaml');
+            expect(provider.get_prompt_launch_command).toBeUndefined();
+        });
+
+        it('builds prompt argv from prompt_launch_command with placeholder substitution', () => {
+            const provider = new Configured_Tool_Provider(
+                make_manifest({
+                    prompt_launch_command: ['my-tool', '--message', '{{prompt}}'],
+                }),
+                '/p/x.yaml',
+            );
+            expect(provider.get_prompt_launch_command?.('hello')).toEqual([
+                'my-tool', '--message', 'hello',
+            ]);
+        });
+
+        it('uses prompt_resume_launch_command on resume when declared', () => {
+            const provider = new Configured_Tool_Provider(
+                make_manifest({
+                    prompt_launch_command: ['my-tool', '--message', '{{prompt}}'],
+                    prompt_resume_launch_command: ['my-tool', '--continue', '--message', '{{prompt}}'],
+                }),
+                '/p/x.yaml',
+            );
+            expect(provider.get_prompt_launch_command?.('hello', { resume: true })).toEqual([
+                'my-tool', '--continue', '--message', 'hello',
+            ]);
         });
 
         it('exposes manifest_hash and manifest_path for the registry to consume', () => {

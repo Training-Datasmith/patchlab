@@ -24,7 +24,7 @@ import {
     stop_container,
     was_authentication_attempted_at_build,
     type Tool_State,
-} from '../podman.js';
+} from '../container_runtime.js';
 import { logger } from '../logger.js';
 import type { Authentication_Result, Tool_Provider } from '../tools/types.js';
 

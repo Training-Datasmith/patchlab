@@ -29,13 +29,17 @@ import {
     UNLIMITED,
     type Persisted_Resource_Limits,
 } from '../../../src/resource_limits.js';
-import type { Loaded_Configuration, Loaded_Resource_Limits } from '../../../src/configuration.js';
+import {
+    loaded_configuration_with_resource_limits,
+    type Loaded_Resource_Limits,
+} from '../../../src/configuration.js';
+import { EMPTY_LOADED_CONFIGURATION } from '../../../src/sandbox/persisted_resource_limits.js';
 
 function empty_loaded_resource_limits(): Loaded_Resource_Limits {
     return { memory_limit: null, cpu_limit: null, pids_limit: null, blkio_weight: null };
 }
 
-const NO_LOADED: Loaded_Configuration = { user_global: null, per_source: null };
+const NO_LOADED = EMPTY_LOADED_CONFIGURATION;
 
 describe('five-layer precedence — single field set at each layer', () => {
     beforeEach(() => {
@@ -55,7 +59,7 @@ describe('five-layer precedence — single field set at each layer', () => {
             memory_limit: '8g',
         };
         const resolved = resolve_resource_limits(
-            { user_global, per_source: null },
+            loaded_configuration_with_resource_limits(user_global, null),
             null,
             {},
         );
@@ -69,7 +73,7 @@ describe('five-layer precedence — single field set at each layer', () => {
             memory_limit: '4g',  // below the 12g default
         };
         const resolved = resolve_resource_limits(
-            { user_global: null, per_source },
+            loaded_configuration_with_resource_limits(null, per_source),
             null,
             {},
         );
@@ -103,7 +107,7 @@ describe('five-layer precedence — higher layers override lower per field', () 
             ...empty_loaded_resource_limits(),
             memory_limit: '8g',
         };
-        const resolved = resolve_resource_limits({ user_global, per_source: null }, null, {});
+        const resolved = resolve_resource_limits(loaded_configuration_with_resource_limits(user_global, null), null, {});
         expect(resolved.memory_limit).toBe('8g');
     });
 
@@ -117,7 +121,7 @@ describe('five-layer precedence — higher layers override lower per field', () 
             memory_limit: '4g',  // tightens within bound
         };
         const resolved = resolve_resource_limits(
-            { user_global, per_source },
+            loaded_configuration_with_resource_limits(user_global, per_source),
             null,
             {},
         );
@@ -137,7 +141,7 @@ describe('five-layer precedence — higher layers override lower per field', () 
             memory_limit: '14g', cpu_limit: '3.0', pids_limit: 1024, blkio_weight: null,
         };
         const resolved = resolve_resource_limits(
-            { user_global, per_source },
+            loaded_configuration_with_resource_limits(user_global, per_source),
             manifest,
             {},
         );
@@ -158,7 +162,7 @@ describe('five-layer precedence — higher layers override lower per field', () 
             memory_limit: '14g', cpu_limit: '3.0', pids_limit: 1024, blkio_weight: null,
         };
         const resolved = resolve_resource_limits(
-            { user_global, per_source: null },
+            loaded_configuration_with_resource_limits(user_global, null),
             manifest,
             {},
         );
@@ -178,7 +182,7 @@ describe('five-layer precedence — higher layers override lower per field', () 
             memory_limit: '14g', cpu_limit: '3.0', pids_limit: 1024, blkio_weight: null,
         };
         const resolved = resolve_resource_limits(
-            { user_global, per_source },
+            loaded_configuration_with_resource_limits(user_global, per_source),
             manifest,
             { memory_limit: '6g' },
         );
@@ -199,7 +203,7 @@ describe('five-layer precedence — higher layers override lower per field', () 
             memory_limit: '2g',
         };
         const resolved = resolve_resource_limits(
-            { user_global, per_source },
+            loaded_configuration_with_resource_limits(user_global, per_source),
             null,
             { memory_limit: '16g' },
         );
@@ -228,7 +232,7 @@ describe('per-field merge — multi-field five-layer interaction', () => {
             blkio_weight: null,
         };
         const resolved = resolve_resource_limits(
-            { user_global, per_source },
+            loaded_configuration_with_resource_limits(user_global, per_source),
             manifest,
             { blkio_weight: 800 },  // CLI sets only this field
         );
@@ -249,7 +253,7 @@ describe('per-field merge — multi-field five-layer interaction', () => {
             blkio_weight: null,
         };
         const resolved = resolve_resource_limits(
-            { user_global, per_source },
+            loaded_configuration_with_resource_limits(user_global, per_source),
             null,
             {},
         );
@@ -269,7 +273,7 @@ describe('regression: per-field merge is not document-level replacement', () => 
             ...empty_loaded_resource_limits(),
             memory_limit: '8g',
         };
-        const resolved = resolve_resource_limits({ user_global, per_source: null }, null, {});
+        const resolved = resolve_resource_limits(loaded_configuration_with_resource_limits(user_global, null), null, {});
         expect(resolved.memory_limit).toBe('8g');
         expect(resolved.cpu_limit).toBe('3.0');   // default
         expect(resolved.pids_limit).toBe(1024);   // default
@@ -284,7 +288,7 @@ describe('regression: per-field merge is not document-level replacement', () => 
             memory_limit: '4g', cpu_limit: '3.0', pids_limit: 256, blkio_weight: null,
         };
         const resolved = resolve_resource_limits(
-            { user_global, per_source: null },
+            loaded_configuration_with_resource_limits(user_global, null),
             manifest,
             { memory_limit: '6g' },
         );
@@ -304,7 +308,7 @@ describe('unlimited propagation across the five layers', () => {
             ...empty_loaded_resource_limits(),
             memory_limit: UNLIMITED,
         };
-        const resolved = resolve_resource_limits({ user_global, per_source: null }, null, {});
+        const resolved = resolve_resource_limits(loaded_configuration_with_resource_limits(user_global, null), null, {});
         expect(resolved.memory_limit).toBe(UNLIMITED);
     });
 
@@ -318,7 +322,7 @@ describe('unlimited propagation across the five layers', () => {
             memory_limit: '2g',
         };
         const resolved = resolve_resource_limits(
-            { user_global, per_source },
+            loaded_configuration_with_resource_limits(user_global, per_source),
             null,
             {},
         );

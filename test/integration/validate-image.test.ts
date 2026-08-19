@@ -5,7 +5,6 @@
  * image branches always exercise without relying on incidental dev-machine state.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -15,17 +14,18 @@ import {
     PATCHLAB_TEST_LABEL,
     remove_test_images,
 } from '../../src/images.js';
-import { image_exists } from '../../src/podman.js';
+import { image_exists, runtime_host_tmpdir } from '../../src/container_runtime.js';
 import { DEFAULT_TEST_TOOL, register_default_test_tool } from '../helpers/stub_tool_provider.js';
+import { exec_runtime_cli } from '../helpers/exec_runtime_cli.js';
 
 const VALID_FIXTURE_TAG = 'patchlab/validate-image-fixture-base:latest';
 const AUTH_FIXTURE_TAG = 'patchlab/validate-image-fixture-auth:latest';
 const DUMMY_TAG = 'patchlab/validate-test-dummy:latest';
 
 function build_image_from_dockerfile(dockerfile: string, tag: string): void {
-    const build_context = fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-validate-fixture-'));
+    const build_context = fs.mkdtempSync(path.join(runtime_host_tmpdir(), 'patchlab-validate-fixture-'));
     try {
-        execFileSync('podman', ['build', '-t', tag, '-f', '-', build_context], {
+        exec_runtime_cli(['build', '-t', tag, '-f', '-', build_context], {
             input: dockerfile,
             stdio: ['pipe', 'pipe', 'pipe'],
         });

@@ -35,10 +35,10 @@ import {
     type Resolved_Resource_Limits,
 } from '../../src/resource_limits.js';
 import { read_persisted_resource_limits } from '../../src/sandbox/persisted_resource_limits.js';
-import type { Loaded_Configuration } from '../../src/configuration.js';
+import { EMPTY_LOADED_CONFIGURATION } from '../../src/sandbox/persisted_resource_limits.js';
 import { install_isolated_home_hooks } from '../helpers/home_directory.js';
 
-const NO_LOADED_CONFIGURATION: Loaded_Configuration = { user_global: null, per_source: null };
+const NO_LOADED_CONFIGURATION = EMPTY_LOADED_CONFIGURATION;
 
 const PATCHLAB_ID = 'manifest-test';
 /** Synthetic `repository_root` used as the per-repo map key in these tests. */

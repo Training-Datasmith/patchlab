@@ -28,9 +28,9 @@ vi.mock('node:os', async (importOriginal) => {
 });
 
 import { resolve_resource_limits } from '../../../src/resource_limits.js';
-import type { Loaded_Configuration } from '../../../src/configuration.js';
+import { EMPTY_LOADED_CONFIGURATION } from '../../../src/sandbox/persisted_resource_limits.js';
 
-const NO_LOADED_CONFIGURATION: Loaded_Configuration = { user_global: null, per_source: null };
+const NO_LOADED_CONFIGURATION = EMPTY_LOADED_CONFIGURATION;
 
 function set_host(memory_bytes: number, cpu_count: number): void {
     host_state.total_memory_bytes = memory_bytes;

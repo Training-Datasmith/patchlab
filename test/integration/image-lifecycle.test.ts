@@ -1,5 +1,4 @@
 import { describe, it, expect, afterAll, beforeAll } from 'vitest';
-import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -16,11 +15,12 @@ import {
     exec_container,
     commit_container,
     container_exists,
-} from '../../src/podman.js';
+} from '../../src/container_runtime.js';
 import {
     FILE_COPY_TEST_TOOL,
     register_file_copy_test_tool,
 } from '../helpers/stub_tool_provider.js';
+import { exec_runtime_cli, inspect_image_labels } from '../helpers/exec_runtime_cli.js';
 
 const TEST_BASE_TAG = 'patchlab/test-lifecycle:base';
 const TEST_AUTH_TAG = 'patchlab/test-lifecycle:auth';
@@ -63,13 +63,13 @@ describe('image lifecycle', () => {
     it('base image has git available', () => {
         const container = `${TEST_CONTAINER}-git-check`;
         try {
-            execFileSync('podman', ['create', '--name', container, TEST_BASE_TAG, 'git', '--version'], { stdio: 'pipe' });
-            execFileSync('podman', ['start', container], { stdio: 'pipe' });
-            const output = execFileSync('podman', ['logs', container], { stdio: 'pipe' }).toString('utf-8');
+            exec_runtime_cli(['create', '--name', container, TEST_BASE_TAG, 'git', '--version'], { stdio: 'pipe' });
+            exec_runtime_cli(['start', container], { stdio: 'pipe' });
+            const output = exec_runtime_cli(['logs', container], { stdio: 'pipe' }).toString('utf-8');
             expect(output).toContain('git version');
         } finally {
             try {
-                execFileSync('podman', ['rm', '-f', container], { stdio: 'pipe' });
+                exec_runtime_cli(['rm', '-f', container], { stdio: 'pipe' });
             } catch {
                 // ignore
             }
@@ -98,12 +98,7 @@ describe('image lifecycle', () => {
             [PATCHLAB_TEST_LABEL]: 'true',
         });
 
-        const labels_raw = execFileSync(
-            'podman',
-            ['image', 'inspect', '--format', '{{json .Labels}}', TEST_AUTH_TAG],
-            { stdio: 'pipe' },
-        ).toString('utf-8').trim();
-        const labels = JSON.parse(labels_raw) as Record<string, string>;
+        const labels = inspect_image_labels(TEST_AUTH_TAG);
         expect(labels['biz.ecartz.patchlab.compatible']).toBe('true');
         expect(labels[`biz.ecartz.patchlab.tool.${FILE_COPY_TEST_TOOL}`]).toBe('authenticated');
         expect(labels['biz.ecartz.patchlab.tools']).toBe(FILE_COPY_TEST_TOOL);
@@ -123,14 +118,14 @@ describe('image lifecycle', () => {
     it('authenticated image still has git available', () => {
         const container = `${TEST_CONTAINER}-no-setup`;
         try {
-            execFileSync('podman', ['create', '--name', container, TEST_AUTH_TAG, 'sleep', 'infinity'], { stdio: 'pipe' });
-            execFileSync('podman', ['start', container], { stdio: 'pipe' });
+            exec_runtime_cli(['create', '--name', container, TEST_AUTH_TAG, 'sleep', 'infinity'], { stdio: 'pipe' });
+            exec_runtime_cli(['start', container], { stdio: 'pipe' });
 
             const git_output = exec_container(container, ['git', '--version']);
             expect(git_output).toContain('git version');
         } finally {
             try {
-                execFileSync('podman', ['rm', '-f', container], { stdio: 'pipe' });
+                exec_runtime_cli(['rm', '-f', container], { stdio: 'pipe' });
             } catch {
                 // ignore
             }

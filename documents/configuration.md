@@ -9,7 +9,7 @@ Patchlab reads optional YAML configuration files at two locations:
 
 Both files are optional. If neither exists, patchlab uses [runtime-computed defaults](#defaults). If `PATCHLAB_HOME` is set in your environment, patchlab reads the user-global file from `${PATCHLAB_HOME}/.patchlab/configuration.yaml` instead — primarily a testing convenience.
 
-The v1 schema accepts exactly one top-level key, `resource_limits`. Future top-level settings will land when their consuming change does; for now, any other top-level key is rejected.
+The v1 schema accepts these top-level keys: `resource_limits`, `default_tool`, and `tool_configuration`. Any other top-level key is rejected.
 
 ## Precedence
 
@@ -41,6 +41,56 @@ resource_limits:
 | `blkio_weight` | Integer in `[10, 1000]` inclusive. No `0`-as-unlimited carve-out — `blkio_weight` is a relative weight, not a cap. Omit the field to leave the flag off. | Block-I/O weight relative to other containers. Translates to `podman create --blkio-weight`. |
 
 All four fields are optional and independently overridable. An omitted field (or one set to YAML `null`) means "fall through to the next-lower-precedence source." A `0` value (where supported) means "explicitly unlimited" and does **not** fall through.
+
+## `default_tool`
+
+Sets the default tool for `patchlab create` when `--tool` is omitted.
+
+**User-global** (`~/.patchlab/configuration.yaml`):
+
+```yaml
+default_tool: opencode
+```
+
+**Per-repository** (`<repository_root>/.patchlab/configuration.yaml`):
+
+```yaml
+default_tool: team-tool
+```
+
+Resolution order: CLI `--tool` → per-repository `default_tool` (when accepted) → user-global `default_tool` → built-in `opencode`.
+
+When a repository's `default_tool` differs from your user-global / built-in fallback, patchlab prompts interactively:
+
+1. Use the repository's `default_tool`
+2. Use your default (user-global or `opencode`)
+3. Abort
+
+Your choice is stored under `~/.patchlab/default-tool-preferences/` (outside the repository). Single-repository creates remember the choice until the repository changes `default_tool`. Multi-repository creates always prompt on conflict (stored per-repo preferences are not auto-applied).
+
+Non-interactive: pass explicit `--tool` or `--allow-untrusted-default-tool` (`PATCHLAB_ALLOW_UNTRUSTED_DEFAULT_TOOL=1`). The opt-in applies the repository value for one invocation without writing a preference.
+
+When multiple repositories set different `default_tool` values, `patchlab create` fails before prompting — align configs or pass `--tool`.
+
+## `tool_configuration` schema
+
+User-global only. Per-tool settings keyed by tool name. Per-source `tool_configuration` is parsed but **ignored** (verbose log).
+
+### OpenCode (`tool_configuration.opencode`)
+
+See [opencode.md](opencode.md) for behavior details.
+
+```yaml
+tool_configuration:
+  opencode:
+    copy_host_configuration: true    # copy ~/.config/opencode into the sandbox (default true)
+    copy_host_auth: true      # copy auth.json (default true)
+    proxy_local_models: true  # host-side TCP proxy for loopback model URLs (default true)
+    environment:              # extra container env; host env wins on conflict
+      SOME_FLAG: "1"
+```
+
+All OpenCode fields are optional. Omitted booleans default to `true`; `environment` defaults to empty.
 
 ## Defaults
 
@@ -79,7 +129,7 @@ The loader fails loudly with an error naming the file path and the offending fie
 - The file exists but cannot be parsed as YAML (syntax error, non-string keys, any error reported by the YAML parser, including YAML alias syntax — aliases are disabled to avoid billion-laughs-style DoS).
 - The file exceeds 64 KiB. The v1 schema fits in well under 1 KiB; this cap exists to defeat `/dev/zero`-style symlinks and oversized blobs.
 - The top-level value of `resource_limits` is not a map.
-- An unknown key appears at the top level (in v1, only `resource_limits` is accepted).
+- An unknown key appears at the top level (only `resource_limits`, `default_tool`, and `tool_configuration` are accepted).
 - An unknown key appears under `resource_limits` (only the four documented fields are accepted; typos like `memmory` are caught).
 - Any numeric value is negative — including `pids: -1`.
 - `blkio_weight` is outside the inclusive range `[10, 1000]`.

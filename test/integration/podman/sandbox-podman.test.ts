@@ -1,12 +1,15 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { create_sandbox_from_directory, ensure_integration_test_tool_registered } from '../test_helpers.js';
-import { DEFAULT_TEST_TOOL } from '../helpers/stub_tool_provider.js';
+import { create_sandbox_from_directory, ensure_integration_test_tool_registered } from '../../test_helpers.js';
+import { DEFAULT_TEST_TOOL } from '../../helpers/stub_tool_provider.js';
 
-import { destroy_sandbox } from '../../src/sandbox/index.js';
-import { exec_container, image_exists, DEFAULT_IMAGE } from '../../src/podman.js';
-import { build_image, list_images, get_default_image, has_any_compatible_image, PATCHLAB_TEST_LABEL, remove_test_images } from '../../src/images.js';
-import { resolve_podman_socket_path } from '../../src/detect/index.js';
-import { get_image_capabilities, check_stale_image } from '../../src/stale.js';
+import { exec_container, image_exists, DEFAULT_IMAGE } from '../../../src/container_runtime.js';
+import { build_image, list_images, get_default_image, has_any_compatible_image, PATCHLAB_TEST_LABEL, remove_test_images } from '../../../src/images.js';
+import { resolve_podman_socket_path } from '../../../src/detect/index.js';
+import { get_image_capabilities, check_stale_image } from '../../../src/stale.js';
+import {
+    create_integration_cleanup_registry,
+    register_destroy_sandbox,
+} from '../../helpers/integration_cleanup.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -14,7 +17,7 @@ import { execFileSync } from 'node:child_process';
 
 const TEST_TAG = 'patchlab/sandbox-podman-test:latest';
 const TEST_LABEL = `${PATCHLAB_TEST_LABEL}=true`;
-const cleanup: (() => void)[] = [];
+const cleanup = create_integration_cleanup_registry();
 
 beforeAll(async () => {
     ensure_integration_test_tool_registered();
@@ -23,21 +26,15 @@ beforeAll(async () => {
     }
 }, 600_000);
 
-afterAll(() => {
-    for (const fn of cleanup.toReversed()) {
-        try {
-            fn();
-        } catch {
-            // ignore
-        }
-    }
+afterAll(async () => {
+    await cleanup.run_all();
     remove_test_images();
 });
 
 // Tests 1-6 below all probe ONE shared socket-mounted sandbox: tests 2-5 are
 // read-only inspections of `podman` running inside, and test 6 writes a tiny
 // /tmp script that no sibling references. Per
-// [documents/testing-strategy.md](../../documents/testing-strategy.md)
+// [documents/testing-strategy.md](../../../documents/testing-strategy.md)
 // "Within an integration file: shared sandbox vs per-test", the sandbox
 // creation lifts into `beforeAll` next to the image build at the file scope.
 // Tests 7-9 (image-label inspections) sit in their own describe further down
@@ -62,7 +59,7 @@ describe('sandbox with podman socket access', () => {
             cwd: source_directory,
             env: { ...process.env, GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 'test@test', GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 'test@test' },
         });
-        cleanup.push(() => fs.rmSync(source_directory, { recursive: true, force: true }));
+        cleanup.register(() => fs.rmSync(source_directory, { recursive: true, force: true }));
 
         const socket_path = resolve_podman_socket_path();
         const manifest = await create_sandbox_from_directory(source_directory, {
@@ -75,15 +72,7 @@ describe('sandbox with podman socket access', () => {
         });
         sandbox_id = manifest.id;
         container_name = manifest.container_name;
-        cleanup.push(() => {
-            (async () => {
-                try {
-                    await destroy_sandbox(sandbox_id, { force: true });
-                } catch {
-                    // ignore
-                }
-            })();
-        });
+        register_destroy_sandbox(cleanup, sandbox_id);
     }, 120_000);
 
     it('creates a sandbox with socket mount and CONTAINER_HOST (beforeAll sanity check)', () => {
@@ -212,7 +201,7 @@ describe('sandbox WITHOUT podman socket access — off-by-default contract', () 
             cwd: source_directory,
             env: { ...process.env, GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 'test@test', GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 'test@test' },
         });
-        cleanup.push(() => fs.rmSync(source_directory, { recursive: true, force: true }));
+        cleanup.register(() => fs.rmSync(source_directory, { recursive: true, force: true }));
 
         // Critical: NO volume_mounts and NO environment_variables. We do not
         // pass the podman-capable TEST_TAG either — using the default test
@@ -224,15 +213,7 @@ describe('sandbox WITHOUT podman socket access — off-by-default contract', () 
         });
         no_socket_sandbox_id = manifest.id;
         no_socket_container_name = manifest.container_name;
-        cleanup.push(() => {
-            (async () => {
-                try {
-                    await destroy_sandbox(no_socket_sandbox_id, { force: true });
-                } catch {
-                    // ignore
-                }
-            })();
-        });
+        register_destroy_sandbox(cleanup, no_socket_sandbox_id);
     }, 120_000);
 
     it('CONTAINER_HOST is unset in the container environment', () => {

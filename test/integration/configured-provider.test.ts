@@ -37,8 +37,8 @@ import {
     remove_container,
     exec_container,
     container_exists,
-} from '../../src/podman.js';
-import { destroy_sandbox } from '../../src/sandbox/index.js';
+} from '../../src/container_runtime.js';
+import { exec_runtime_cli, inspect_image_labels } from '../helpers/exec_runtime_cli.js';
 import {
     register_per_source_manifests,
 } from '../../src/tools/index.js';
@@ -46,8 +46,10 @@ import {
     _drop_per_source_registrations,
     get_provider,
 } from '../../src/tools/provider.js';
-
-const TEST_LABEL = `${PATCHLAB_TEST_LABEL}=true`;
+import {
+    create_integration_cleanup_registry,
+    register_destroy_sandbox,
+} from '../helpers/integration_cleanup.js';
 const TEST_CONTAINER = 'patchlab-configured-provider-integration';
 
 const LAUNCH_TOKEN = 'patchlab-configured-provider-launched-ok';
@@ -74,16 +76,11 @@ launch_command:
   - echo ${LAUNCH_TOKEN}
 `;
 
-const cleanup: (() => void)[] = [];
+const TEST_LABEL = `${PATCHLAB_TEST_LABEL}=true`;
+const cleanup = create_integration_cleanup_registry();
 
-afterAll(() => {
-    for (const fn of cleanup.toReversed()) {
-        try {
-            fn();
-        } catch (_ignored) {
-            // ignore
-        }
-    }
+afterAll(async () => {
+    await cleanup.run_all();
     remove_test_images();
     _drop_per_source_registrations();
 });
@@ -107,7 +104,7 @@ describe('configured-provider dispatch via real podman', () => {
         execFileSync('git', ['init', '-q'], { cwd: source_path, stdio: 'pipe' });
         execFileSync('git', ['-c', 'user.email=test@test', '-c', 'user.name=test', 'add', '-A'], { cwd: source_path, stdio: 'pipe' });
         execFileSync('git', ['-c', 'user.email=test@test', '-c', 'user.name=test', 'commit', '-q', '-m', 'initial'], { cwd: source_path, stdio: 'pipe' });
-        cleanup.push(() => {
+        cleanup.register(() => {
             try {
                 fs.rmSync(source_path, { recursive: true, force: true });
             } catch (_ignored) {
@@ -139,9 +136,9 @@ describe('configured-provider dispatch via real podman', () => {
             labels: [TEST_LABEL],
         });
         expect(configured_tag).toBeTruthy();
-        cleanup.push(() => {
+        cleanup.register(() => {
             try {
-                execFileSync('podman', ['rmi', '-f', configured_tag], { stdio: 'pipe' });
+                exec_runtime_cli(['rmi', '-f', configured_tag], { stdio: 'pipe' });
             } catch (_ignored) {
                 // ignore
             }
@@ -154,12 +151,7 @@ describe('configured-provider dispatch via real podman', () => {
         // stripped it) would only manifest when a downstream cache lookup
         // missed — which the smoke test below does NOT exercise, since it
         // creates a fresh container against the just-built tag every time.
-        const labels_raw = execFileSync(
-            'podman',
-            ['image', 'inspect', '--format', '{{json .Labels}}', configured_tag],
-            { stdio: 'pipe' },
-        ).toString('utf-8').trim();
-        const labels = JSON.parse(labels_raw) as Record<string, string>;
+        const labels = inspect_image_labels(configured_tag);
         // The patchlab-compatible label is universal across patchlab images.
         expect(labels['biz.ecartz.patchlab.compatible']).toBe('true');
         // The tools label is a comma-separated list (or a single name); the
@@ -172,7 +164,7 @@ describe('configured-provider dispatch via real podman', () => {
         // command, verify the token appears in the container's stdout. This
         // is what `patchlab create` does after building the image.
         create_container(TEST_CONTAINER, configured_tag);
-        cleanup.push(() => {
+        cleanup.register(() => {
             try {
                 remove_container(TEST_CONTAINER);
             } catch (_ignored) {
@@ -203,15 +195,7 @@ describe('configured-provider dispatch via real podman', () => {
             no_install: true,
             allow_untrusted_manifests: true,
         });
-        cleanup.push(() => {
-            (async () => {
-                try {
-                    await destroy_sandbox(manifest.id, { force: true });
-                } catch (_ignored) {
-                    // ignore
-                }
-            })();
-        });
+        register_destroy_sandbox(cleanup, manifest.id);
 
         // The dispatched provider's launch command produces the token
         // inside the create_sandbox-provisioned container.

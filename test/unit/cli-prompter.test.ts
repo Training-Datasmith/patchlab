@@ -147,6 +147,34 @@ describe('Readline_Prompter.choose — readline integration', () => {
         const prompter = new Readline_Prompter();
         expect(await prompter.choose('pick: ', ['a', 'b'])).toBeNull();
     });
+
+    it('prints None by default and Abort when cancel_label is set', async () => {
+        const log_lines: string[] = [];
+        const { logger, set_logger } = await import('../../src/logger.js');
+        const previous = logger();
+        set_logger({
+            result: (line: string) => previous.result(line),
+            info: (line: string) => {
+                log_lines.push(line);
+                previous.info(line);
+            },
+            warn: (line: string) => previous.warn(line),
+            error: (line: string) => previous.error(line),
+            verbose: (line: string) => previous.verbose(line),
+        });
+
+        readline_mock_state.next_answer = '1';
+        const prompter = new Readline_Prompter();
+        await prompter.choose('pick: ', ['repo tool', 'host default']);
+        expect(log_lines.some((line) => line.includes('3. None'))).toBe(true);
+
+        log_lines.length = 0;
+        await prompter.choose('pick: ', ['repo tool', 'host default'], { cancel_label: 'Abort' });
+        expect(log_lines.some((line) => line.includes('3. Abort'))).toBe(true);
+        expect(log_lines.some((line) => line.includes('3. None'))).toBe(false);
+
+        set_logger(previous);
+    });
 });
 
 describe('cli_prompter — structural invariant', () => {

@@ -13,6 +13,42 @@ const shared = {
     hookTimeout: 60_000,
 } as const;
 
+const integration_project = {
+    setupFiles: ['test/integration/set-up-podman.ts'],
+    fileParallelism: false,
+    ...shared,
+} as const;
+
+const integration_nerdctl_project = {
+    setupFiles: [
+        'test/integration/set-up-podman.ts',
+        'test/integration/set-up-required-runtime.ts',
+    ],
+    fileParallelism: false,
+    env: {
+        ...shared.env,
+        PATCHLAB_CONTAINER_RUNTIME: 'nerdctl',
+        PATCHLAB_REQUIRED_CONTAINER_RUNTIME: 'nerdctl',
+    },
+    testTimeout: shared.testTimeout,
+    hookTimeout: shared.hookTimeout,
+} as const;
+
+const integration_podman_project = {
+    setupFiles: [
+        'test/integration/set-up-podman.ts',
+        'test/integration/set-up-required-runtime.ts',
+    ],
+    fileParallelism: false,
+    env: {
+        ...shared.env,
+        PATCHLAB_CONTAINER_RUNTIME: 'podman',
+        PATCHLAB_REQUIRED_CONTAINER_RUNTIME: 'podman',
+    },
+    testTimeout: shared.testTimeout,
+    hookTimeout: shared.hookTimeout,
+} as const;
+
 export default defineConfig({
     // Keep Vite's transform cache outside node_modules to prevent stale
     // cache errors on Windows ("Cannot read properties of undefined
@@ -33,24 +69,44 @@ export default defineConfig({
                 test: {
                     name: 'unit',
                     include: ['test/unit/**/*.test.ts'],
-                    ...shared,
+                    env: {
+                        ...shared.env,
+                        // Mocked unit tests assert podman argv shape; pin the
+                        // runtime so auto-detect does not resolve nerdctl on macOS.
+                        PATCHLAB_CONTAINER_RUNTIME: 'podman',
+                    },
+                    testTimeout: shared.testTimeout,
+                    hookTimeout: shared.hookTimeout,
                 },
             },
             {
                 test: {
                     name: 'integration',
                     include: ['test/integration/**/*.test.ts'],
-                    setupFiles: ['test/integration/setup-podman.ts'],
-                    fileParallelism: false,
-                    ...shared,
+                    exclude: ['test/integration/podman/**', 'test/integration/nerdctl/**'],
+                    ...integration_project,
+                },
+            },
+            {
+                test: {
+                    name: 'integration-podman',
+                    include: ['test/integration/podman/**/*.test.ts'],
+                    ...integration_podman_project,
+                },
+            },
+            {
+                test: {
+                    name: 'integration-nerdctl',
+                    include: ['test/integration/nerdctl/**/*.test.ts'],
+                    ...integration_nerdctl_project,
                 },
             },
             {
                 // POSIX-only assertions (fifo/socket types, case-sensitive
                 // `.YAML` vs `.yaml`, unprivileged symlinks). Run with
                 // `npm run test:posix`, which executes this project inside
-                // a Linux container. NOT included in the default `npm test`
-                // run because it's a no-op on Windows hosts.
+                // a Linux container on Windows and macOS hosts. On Linux,
+                // `npm test` runs this project natively.
                 test: {
                     name: 'posix',
                     include: ['test/posix/**/*.test.ts'],
@@ -60,12 +116,21 @@ export default defineConfig({
             {
                 // Windows-only assertions (NTFS junctions / reparse points,
                 // drive-letter handling, separator-mixing on Windows-shaped
-                // paths). Each test self-gates with `process.platform !==
-                // 'win32'` so the project is a no-op on POSIX hosts. Run via
-                // `npm test` on a Windows host; runs inert on Linux/macOS.
+                // paths). Run via `npm test` on a Windows host. Self-gates
+                // when invoked directly on POSIX (e.g. Linux CI).
                 test: {
                     name: 'windows',
                     include: ['test/windows/**/*.test.ts'],
+                    ...shared,
+                },
+            },
+            {
+                // macOS-only assertions (APFS case-insensitivity with
+                // production-default path comparison). Run via `npm test` on
+                // a Mac. Self-gates when invoked directly off-macOS (e.g. Linux CI).
+                test: {
+                    name: 'macos',
+                    include: ['test/macos/**/*.test.ts'],
                     ...shared,
                 },
             },

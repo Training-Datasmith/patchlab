@@ -32,67 +32,29 @@ import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { destroy_sandbox, resume_sandbox } from '../../src/sandbox/index.js';
+import { resume_sandbox } from '../../src/sandbox/index.js';
 import { build_image, PATCHLAB_TEST_LABEL, remove_test_images } from '../../src/images.js';
-import { image_exists } from '../../src/podman.js';
+import { image_exists } from '../../src/container_runtime.js';
 import { DEFAULT_TEST_TOOL } from '../helpers/stub_tool_provider.js';
 import { next_session_number, read_session_metadata } from '../../src/archive.js';
-/**
- * Detect whether THIS host actually enforces resource limits via podman.
- *
- * The check runs `podman create --memory 1g`, inspects `HostConfig.Memory`,
- * and removes the probe container. On hosts with cgroups V1 rootless (or
- * any other configuration where podman zeroes the recorded limit), Memory
- * reads back as 0 even though the argv carried `--memory 1g`.
- *
- * This is more reliable than `probe_cgroup_capabilities()` because the
- * probe runs on the Node host kernel, but on macOS/Windows podman runs in
- * a separate VM whose kernel state the probe can't see.
- */
-function detect_podman_enforces_limits(): boolean {
-    const probe_name = `patchlab-resource-limit-probe-${Date.now()}`;
-    try {
-        execFileSync('podman', [
-            'create', '--name', probe_name, '--memory', '1g', 'node:22-slim', 'sleep', 'infinity',
-        ], { stdio: 'pipe' });
-    } catch {
-        return false;
-    }
-
-    try {
-        const output = execFileSync(
-            'podman', ['inspect', '--format', '{{.HostConfig.Memory}}', probe_name],
-            { encoding: 'utf-8' },
-        );
-        return Number(output.trim()) === 1024 * 1024 * 1024;
-    } catch {
-        return false;
-    } finally {
-        try {
-            execFileSync('podman', ['rm', '-f', probe_name], { stdio: 'pipe' });
-        } catch {
-            /* best-effort */
-        }
-    }
-}
+import { detect_runtime_enforces_limits, exec_runtime_cli, inspect_host_config } from '../helpers/exec_runtime_cli.js';
+import {
+    create_integration_cleanup_registry,
+    register_destroy_sandbox,
+} from '../helpers/integration_cleanup.js';
 
 const TEST_TAG = 'patchlab/sandbox-resource-limits-test:latest';
 const TEST_LABEL = `${PATCHLAB_TEST_LABEL}=true`;
 
 interface Host_Config {
     Memory: number;
-    NanoCpus: number;
+    NanoCpus: number | undefined;
     PidsLimit: number;
     BlkioWeight: number;
 }
 
-function inspect_host_config(container_name: string): Host_Config {
-    const output = execFileSync(
-        'podman',
-        ['inspect', '--format', '{{json .HostConfig}}', container_name],
-        { encoding: 'utf-8' },
-    );
-    return JSON.parse(output) as Host_Config;
+function read_host_config(container_name: string): Host_Config {
+    return inspect_host_config(container_name);
 }
 
 function make_source_directory(): string {
@@ -111,7 +73,7 @@ function make_source_directory(): string {
     return directory;
 }
 
-const cleanup: (() => void)[] = [];
+const cleanup = create_integration_cleanup_registry();
 
 beforeAll(async () => {
     if (!image_exists(TEST_TAG)) {
@@ -119,14 +81,8 @@ beforeAll(async () => {
     }
 }, 600_000);
 
-afterAll(() => {
-    for (const fn of cleanup.toReversed()) {
-        try {
-            fn();
-        } catch {
-            // best-effort
-        }
-    }
+afterAll(async () => {
+    await cleanup.run_all();
     remove_test_images();
 });
 
@@ -137,12 +93,12 @@ describe('sandbox resource limits applied to podman container', () => {
     let limits_enforced: boolean;
 
     beforeAll(() => {
-        limits_enforced = detect_podman_enforces_limits();
+        limits_enforced = detect_runtime_enforces_limits();
     });
 
     it('create applies --memory, --cpus, --pids-limit, --blkio-weight via podman flags', async () => {
         source_directory = make_source_directory();
-        cleanup.push(() => fs.rmSync(source_directory, { recursive: true, force: true }));
+        cleanup.register(() => fs.rmSync(source_directory, { recursive: true, force: true }));
 
         const manifest = await create_sandbox_from_directory(source_directory, {
             image: TEST_TAG,
@@ -156,15 +112,7 @@ describe('sandbox resource limits applied to podman container', () => {
         });
         sandbox_id = manifest.id;
         create_container_name = manifest.container_name;
-        cleanup.push(() => {
-            (async () => {
-                try {
-                    await destroy_sandbox(sandbox_id, { force: true });
-                } catch {
-                    // ignore
-                }
-            })();
-        });
+        register_destroy_sandbox(cleanup, sandbox_id);
 
         if (!limits_enforced) {
             // The kernel can't enforce the flags on this host (rootless cgroup
@@ -176,7 +124,7 @@ describe('sandbox resource limits applied to podman container', () => {
             return;
         }
 
-        const host = inspect_host_config(create_container_name);
+        const host = read_host_config(create_container_name);
         expect(host.Memory).toBe(1024 * 1024 * 1024);
         // podman converts --cpus to NanoCpus: cpus * 1e9.
         expect(host.NanoCpus).toBe(1_000_000_000);
@@ -212,7 +160,7 @@ describe('sandbox resource limits applied to podman container', () => {
             return;
         }
 
-        const host = inspect_host_config(resume_container);
+        const host = read_host_config(resume_container);
         expect(host.Memory).toBe(1024 * 1024 * 1024);
         expect(host.NanoCpus).toBe(1_000_000_000);
         expect(host.PidsLimit).toBe(256);
@@ -247,21 +195,13 @@ describe('sandbox resource limits applied to podman container', () => {
                 pids_limit: 1024,     // conflicts with manifest's 256
             },
         });
-        cleanup.push(() => {
-            (async () => {
-                try {
-                    await destroy_sandbox(resumed_again.id, { force: true });
-                } catch {
-                    // ignore
-                }
-            })();
-        });
+        register_destroy_sandbox(cleanup, resumed_again.id);
 
         if (!limits_enforced) {
             return;
         }
 
-        const host = inspect_host_config(resumed_again.container_name);
+        const host = read_host_config(resumed_again.container_name);
         // CLI-overridden fields take the CLI value, not the manifest's.
         expect(host.Memory).toBe(2 * 1024 * 1024 * 1024);
         expect(host.PidsLimit).toBe(1024);

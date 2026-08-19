@@ -13,13 +13,17 @@ vi.mock('node:fs', async (original) => {
         rmSync: vi.fn(),
     };
 });
-vi.mock('../../src/podman.js', () => ({
+vi.mock('../../src/container_runtime.js', () => ({
     image_exists: vi.fn(() => false),
+    get_runtime_binary: vi.fn(() => 'podman'),
+    runtime_host_tmpdir: vi.fn(() => '/tmp/patchlab-test'),
     CONTAINER_UID: 1000,
 }));
 
 import { execFileSync } from 'node:child_process';
 import { build_image } from '../../src/images.js';
+import { OPENCODE_PINNED_VERSION } from '../../src/opencode/version.js';
+import { get_provider } from '../../src/tools/index.js';
 import type { Authentication_Method } from '../../src/tools/types.js';
 
 function captured_dockerfile(): string {
@@ -232,6 +236,31 @@ describe('build_image Dockerfile shape (tasks 6.6.1, 6.6.2, 6.7, 6.8, 4.5.4)', (
             await build_image({ tools: [DEFAULT_TEST_TOOL], base_image: 'python:3.12-slim' });
             const dockerfile = captured_dockerfile();
             expect(dockerfile).toContain('FROM python:3.12-slim');
+        });
+
+        it('installs opencode on a detected python base with an npm bootstrap', async () => {
+            vi.mocked(execFileSync).mockReturnValue(Buffer.from(''));
+            await build_image({ tools: ['opencode'], base_image: 'python:3.12-slim' });
+            const dockerfile = captured_dockerfile();
+
+            expect(dockerfile).toContain('FROM python:3.12-slim');
+            expect(dockerfile).toMatch(/command -v npm|nodesource|setup_22/i);
+            expect(dockerfile).toContain('opencode-ai@');
+            expect(dockerfile).not.toContain('opencode-ai@latest');
+        });
+
+        it('labels opencode images with pinned version and manifest spec hash', async () => {
+            vi.mocked(execFileSync).mockReturnValue(Buffer.from(''));
+            await build_image({ tools: ['opencode'], base_image: 'python:3.12-slim' });
+            const dockerfile = captured_dockerfile();
+            const provider = get_provider('opencode') as { manifest_hash?: string };
+
+            expect(dockerfile).toContain(
+                `biz.ecartz.patchlab.tool.opencode.version=${JSON.stringify(OPENCODE_PINNED_VERSION)}`,
+            );
+            expect(dockerfile).toContain(
+                `biz.ecartz.patchlab.tool.opencode.spec_hash=${JSON.stringify(provider.manifest_hash)}`,
+            );
         });
     });
 

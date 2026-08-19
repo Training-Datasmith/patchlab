@@ -18,7 +18,7 @@ import {
     generate_session_patch,
     write_patch,
 } from '../../src/patches.js';
-import * as podman from '../../src/podman.js';
+import * as podman from '../../src/container_runtime.js';
 import {
     GIT_TEST_ENVIRONMENT,
     initialize_repository_with_initial_commit,
@@ -32,8 +32,8 @@ import { DEFAULT_TEST_TOOL, register_default_test_tool } from '../helpers/stub_t
 // don't depend on podman behaviorally — `container_running` against a
 // non-existent container returns false in the mock just as it would on a real
 // host with no matching container, so the cumulative-only path is unchanged.
-vi.mock('../../src/podman.js', async () => {
-    const actual = await vi.importActual<typeof import('../../src/podman.js')>('../../src/podman.js');
+vi.mock('../../src/container_runtime.js', async () => {
+    const actual = await vi.importActual<typeof import('../../src/container_runtime.js')>('../../src/container_runtime.js');
     return {
         ...actual,
         container_running: vi.fn().mockReturnValue(false),

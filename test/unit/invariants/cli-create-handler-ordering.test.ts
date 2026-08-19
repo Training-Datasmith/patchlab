@@ -76,6 +76,42 @@ describe('create CLI handler: per-source registration runs before get_provider',
         expect(sources_resolution).toBeLessThan(register_index);
     });
 
+    it('the create action verifies per-source default_tool before get_provider', () => {
+        const cli_source = fs.readFileSync(path.join(repo_root, 'src', 'cli.ts'), 'utf-8');
+        const create_block = slice_command_block(cli_source, ".command('create')");
+
+        const verify_default_tool_index = create_block.indexOf('verify_per_source_default_tool(');
+        const get_provider_index = create_block.indexOf('get_provider(');
+
+        expect(verify_default_tool_index).toBeGreaterThan(-1);
+        expect(get_provider_index).toBeGreaterThan(-1);
+        expect(verify_default_tool_index).toBeLessThan(get_provider_index);
+    });
+
+    it('the create action registers per-source manifests before default_tool verify', () => {
+        const cli_source = fs.readFileSync(path.join(repo_root, 'src', 'cli.ts'), 'utf-8');
+        const create_block = slice_command_block(cli_source, ".command('create')");
+
+        const register_index = create_block.indexOf('register_per_source_manifests(');
+        const verify_default_tool_index = create_block.indexOf('verify_per_source_default_tool(');
+
+        expect(register_index).toBeGreaterThan(-1);
+        expect(verify_default_tool_index).toBeGreaterThan(-1);
+        expect(register_index).toBeLessThan(verify_default_tool_index);
+    });
+
+    it('the create action verifies per-source default_tool before building any image', () => {
+        const cli_source = fs.readFileSync(path.join(repo_root, 'src', 'cli.ts'), 'utf-8');
+        const create_block = slice_command_block(cli_source, ".command('create')");
+
+        const verify_default_tool_index = create_block.indexOf('verify_per_source_default_tool(');
+        const ensure_image_index = create_block.indexOf('ensure_default_image(');
+
+        expect(verify_default_tool_index).toBeGreaterThan(-1);
+        expect(ensure_image_index).toBeGreaterThan(-1);
+        expect(verify_default_tool_index).toBeLessThan(ensure_image_index);
+    });
+
     it('the create action verifies per-source trust BEFORE building any image', () => {
         // A per-source provider's `dockerfile.install` lines run as `RUN`
         // directives during ensure_default_image's `podman build`, and the

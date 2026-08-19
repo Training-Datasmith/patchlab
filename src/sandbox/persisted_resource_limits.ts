@@ -14,6 +14,9 @@ import type { Loaded_Configuration } from '../configuration.js';
 export const EMPTY_LOADED_CONFIGURATION: Loaded_Configuration = {
     user_global: null,
     per_source: null,
+    default_tool: null,
+    tool_configuration: {},
+    per_repository_default_tools: {},
 };
 
 /**

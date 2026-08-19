@@ -9,7 +9,7 @@
  *   - `src/a/b/x.ts` ↔ `test/<tier>/a/b/x.test.ts` (mirrored nesting)
  *   - `src/a/b/x.ts` ↔ `test/<tier>/a/b/x/`
  *
- * Where `<tier>` is `unit`, `integration`, `posix`, or `windows`. The snake-
+ * Where `<tier>` is `unit`, `integration`, `posix`, `windows`, or `macos`. The snake-
  * cased src filename matches the kebab-cased test filename (and vice versa).
  *
  * Files exempted from the mirror rule are listed in `MIRROR_EXEMPTIONS`
@@ -33,7 +33,7 @@ import * as path from 'node:path';
 
 const REPOSITORY_ROOT = path.resolve(__dirname, '..', '..', '..');
 const SOURCE_ROOT = path.join(REPOSITORY_ROOT, 'src');
-const TEST_TIERS = ['unit', 'integration', 'posix', 'windows'] as const;
+const TEST_TIERS = ['unit', 'integration', 'posix', 'windows', 'macos'] as const;
 
 interface Mirror_Exemption {
     relative_path: string;
@@ -81,13 +81,26 @@ const MIRROR_EXEMPTIONS: Mirror_Exemption[] = [
     { relative_path: 'tools/configured_provider/trust_hash.ts', rationale: 'tested via configured_provider/index.ts re-export (see test/unit/tools/configured_provider/per-source-trust.test.ts)' },
     { relative_path: 'tools/configured_provider/trust_marker.ts', rationale: 'INDIRECT: tested via test/unit/tools/configured_provider/per-source-trust.test.ts and test/windows/per-source-trust.test.ts' },
     { relative_path: 'tools/configured_provider/trust_verification.ts', rationale: 'INDIRECT: tested via test/unit/tools/configured_provider/per-source-trust.test.ts and test/unit/tools/configured_provider/trust-flag-resolution.test.ts' },
+    { relative_path: 'tools/repository_state_key.ts', rationale: 'INDIRECT: realpath keying tested via test/unit/tools/default-tool-preference.test.ts and per-source-trust marker tests' },
 
     // Tested through provider abstraction tests.
     { relative_path: 'tools/provider.ts', rationale: 'INDIRECT: unit coverage in test/unit/tool-registry.test.ts, test/unit/list-tools.test.ts, test/unit/register-*.test.ts; integration smoke in test/integration/configured-provider.test.ts' },
 
+    // Container runtime layer.
+    { relative_path: 'container_runtime/index.ts', rationale: 'INDIRECT: commit.test.ts + test/unit/podman/* + integration tests' },
+    { relative_path: 'container_runtime/registry.ts', rationale: 'INDIRECT: runtime registry dispatch tested via test/unit/podman/* and integration tests' },
+    { relative_path: 'container_runtime/types.ts', rationale: 'type-only module' },
+
     // Tested through topic-named test files.
     { relative_path: 'configuration.ts', rationale: 'INDIRECT: tested via test/unit/configuration-loader.test.ts and configuration-loader-fs-faults.test.ts' },
     { relative_path: 'extractable_artifact.ts', rationale: 'INDIRECT: validator surface in test/unit/archive-validators.test.ts and test/posix/archive-validators.test.ts; injection flow in test/integration/extraction.test.ts' },
+
+    // OpenCode module (tested under test/unit/opencode/).
+    { relative_path: 'local_model_proxy/main.ts', rationale: 'INDIRECT: detached daemon entrypoint; spawn path exercised via test/unit/local_model_proxy/manager.test.ts and proxy.test.ts' },
+    { relative_path: 'opencode/index.ts', rationale: 're-export wrapper for opencode/* siblings' },
+    { relative_path: 'tools/host_access.ts', rationale: 'type-only module (host access plan interfaces and host gateway hostname)' },
+    { relative_path: 'opencode/paths.ts', rationale: 'INDIRECT: path helpers exercised via test/unit/opencode/host-configuration.test.ts and provider.test.ts' },
+    { relative_path: 'opencode/settings.ts', rationale: 'INDIRECT: defaults exercised via test/unit/configuration-loader.test.ts and provider tests' },
 ];
 
 const EXEMPT_PATHS = new Set(MIRROR_EXEMPTIONS.map((entry) => entry.relative_path));

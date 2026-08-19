@@ -1,21 +1,40 @@
 {
   "name": "patchlab",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Isolated sandbox laboratory for creating patches to optionally merge back to the source",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
   "bin": {
     "patchlab": "dist/cli.js"
   },
+  "files": [
+    "dist",
+    "documents",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
+    "prepack": "npm run build",
     "test": "node scripts/run-tests.mjs",
     "test:unit": "vitest run --project unit",
     "test:coverage": "vitest run --coverage",
     "test:posix": "node scripts/test-posix.mjs",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.tests.json",
-    "typecheck:tests": "tsc -p tsconfig.tests.json"
+    "typecheck:tests": "tsc -p tsconfig.tests.json",
+    "verify:pack": "node scripts/verify-npm-pack.mjs",
+    "audit:prod": "npm audit --omit=dev --audit-level=high",
+    "audit": "npm audit --audit-level=high",
+    "verify:integration-cleanup": "node scripts/verify-integration-cleanup.mjs"
   },
   "keywords": [
     "patch",
@@ -23,7 +42,17 @@
     "diff",
     "code-generation"
   ],
-  "license": "MIT",
+  "license": "GPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Training-Datasmith/patchlab.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Training-Datasmith/patchlab/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "commander": "^14.0.3",
     "glob": "^13.0.6",
@@ -31,7 +60,7 @@
     "yaml": "^2.8.3"
   },
   "devDependencies": {
-    "@types/node": "^25.5.2",
+    "@types/node": "^20.19.0",
     "@types/picomatch": "^4.0.3",
     "@vitest/coverage-v8": "^4.1.8",
     "typescript": "^5.9.3",

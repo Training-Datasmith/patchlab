@@ -26,7 +26,7 @@ const state = vi.hoisted((): Tool_State_Mock_State => ({
     create_container_calls: [] as Create_Container_Call[],
 }));
 
-vi.mock('../../../src/podman.js', async (importOriginal) => {
+vi.mock('../../../src/container_runtime.js', async (importOriginal) => {
     const { build_tool_state_podman_mock } = await import('../../helpers/podman_mock_tool_state.js');
     const podman_mock = await build_tool_state_podman_mock(state, importOriginal);
     // effective-image additionally stubs the user-path accessors so manifest
@@ -46,7 +46,7 @@ import {
     install_package,
     commit_container,
     get_image_tool_state,
-} from '../../../src/podman.js';
+} from '../../../src/container_runtime.js';
 
 const mock_create_container = create_container as ReturnType<typeof vi.fn>;
 const mock_install_package = install_package as ReturnType<typeof vi.fn>;
@@ -456,7 +456,11 @@ describe('environment_variables authentication flow in create_sandbox', () => {
             expect.any(String),
             expect.any(String),
             expect.objectContaining({
-                extra_environment_variables: { TEST_API_KEY: 'test-key-123' },
+                extra_environment_variables: {
+                    HOME: '/home/node',
+                    USER: 'node',
+                    TEST_API_KEY: 'test-key-123',
+                },
             }),
         );
         expect(manifest.tool).toBe(ENV_VAR_TEST_TOOL);
@@ -541,7 +545,12 @@ describe('environment_variables authentication flow in create_sandbox', () => {
             expect.any(String),
             expect.any(String),
             expect.objectContaining({
-                extra_environment_variables: { TOKEN_A: 'value-a', TOKEN_B: 'value-b' },
+                extra_environment_variables: {
+                    HOME: '/home/patchlab',
+                    USER: 'patchlab',
+                    TOKEN_A: 'value-a',
+                    TOKEN_B: 'value-b',
+                },
             }),
         );
     });

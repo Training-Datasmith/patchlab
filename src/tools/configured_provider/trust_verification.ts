@@ -100,6 +100,12 @@ function build_minimum_disclosure_lines(
         lines.push(
             `  Manifest: ${manifest.name} (${manifest.display_name})`,
             `    launch_command: ${JSON.stringify(manifest.launch_command)}`,
+            ...(manifest.prompt_launch_command === undefined
+                ? []
+                : [`    prompt_launch_command: ${JSON.stringify(manifest.prompt_launch_command)}`]),
+            ...(manifest.prompt_resume_launch_command === undefined
+                ? []
+                : [`    prompt_resume_launch_command: ${JSON.stringify(manifest.prompt_resume_launch_command)}`]),
             `    base_image: ${manifest.base_image}`,
             `    authentication.method: ${manifest.authentication.method}`);
 

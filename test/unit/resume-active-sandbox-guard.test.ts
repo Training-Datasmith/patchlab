@@ -21,8 +21,8 @@ import { make_fake_prompter } from '../helpers/fake_prompter.js';
 // `resume_sandbox` import on the next line resolves with the mocked
 // `container_running`. Every OTHER export of `./podman.js` must still flow
 // through (the actual module is large; many src/ files import other names).
-vi.mock('../../src/podman.js', async () => {
-    const actual = await vi.importActual<typeof import('../../src/podman.js')>('../../src/podman.js');
+vi.mock('../../src/container_runtime.js', async () => {
+    const actual = await vi.importActual<typeof import('../../src/container_runtime.js')>('../../src/container_runtime.js');
     return {
         ...actual,
         container_exists: vi.fn(() => true),
@@ -68,18 +68,25 @@ describe('resume_sandbox — active-sandbox guard (container_exists mocked)', ()
     });
 
     it('throws "already has an existing container" when no prompter is supplied', async () => {
-        // The non-interactive branch: `container_exists` returns true (mocked),
-        // `options.prompter` is undefined, so the helper throws a self-describing
-        // error naming the patchlab id and the two remedies (pass prompter, or
-        // remove the container first). Without this throw, an automation script
-        // would silently start TWO containers for the same patchlab and the
-        // second one would clobber the first's mount.
         await expect(resume_sandbox(patchlab_id)).rejects.toThrow(
             new RegExp(`Patchlab ${patchlab_id} already has an existing container`),
         );
         await expect(resume_sandbox(patchlab_id)).rejects.toThrow(
             /pass prompter or remove the container first/,
         );
+    });
+
+    it('runs provider_preflight before active-sandbox guard', async () => {
+        await expect(resume_sandbox(patchlab_id, {
+            provider_preflight: () => {
+                throw new Error('provider preflight failed');
+            },
+        })).rejects.toThrow(/provider preflight failed/);
+        await expect(resume_sandbox(patchlab_id, {
+            provider_preflight: () => {
+                throw new Error('provider preflight failed');
+            },
+        })).rejects.not.toThrow(/already has an existing container/);
     });
 
     it('throws "Resume aborted" when prompter declines', async () => {

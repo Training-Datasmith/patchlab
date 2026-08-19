@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { destroy_sandbox } from '../../src/sandbox/index.js';
 import { generate_patch } from '../../src/patches.js';
 import { apply_patch } from '../../src/apply.js';
-import { exec_container } from '../../src/podman.js';
+import { exec_container } from '../../src/container_runtime.js';
 
 describe('patch application', () => {
     let source_directory: string;

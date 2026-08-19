@@ -32,8 +32,8 @@ vi.mock('../../../src/sandbox/index.js', async (importOriginal) => {
     };
 });
 
-vi.mock('../../../src/podman.js', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('../../../src/podman.js')>();
+vi.mock('../../../src/container_runtime.js', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../../src/container_runtime.js')>();
     return {
         ...actual,
         exec_interactive: vi.fn(),
@@ -42,7 +42,7 @@ vi.mock('../../../src/podman.js', async (importOriginal) => {
 
 import { handle_gc_command, handle_exec_command } from '../../../src/cli.js';
 import { garbage_collect_sandboxes, inspect_sandbox } from '../../../src/sandbox/index.js';
-import { exec_interactive } from '../../../src/podman.js';
+import { exec_interactive } from '../../../src/container_runtime.js';
 
 const mocked_garbage_collect = vi.mocked(garbage_collect_sandboxes);
 const mocked_inspect_sandbox = vi.mocked(inspect_sandbox);

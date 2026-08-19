@@ -15,6 +15,7 @@ import { validate_authentication } from './authentication.js';
 import {
     validate_extractable_artifacts,
     validate_launch_command,
+    validate_optional_prompt_launch_command,
     validate_validation_block,
 } from './artifacts.js';
 import { validate_dockerfile } from './dockerfile.js';
@@ -40,7 +41,8 @@ import {
 const KNOWN_TOP_LEVEL_FIELDS = new Set([
     'name', 'display_name', 'image_user', 'image_home',
     'configuration_directory_name', 'base_image', 'base_family', 'package_manager',
-    'dockerfile', 'authentication', 'launch_command', 'validation', 'extractable_artifacts',
+    'dockerfile', 'authentication', 'launch_command', 'prompt_launch_command',
+    'prompt_resume_launch_command', 'validation', 'extractable_artifacts',
     'overrides_builtin',
 ]);
 
@@ -195,6 +197,20 @@ export function parse_manifest(
             );
         }
         const launch_command = validate_launch_command(root.launch_command);
+        const prompt_launch_command = validate_optional_prompt_launch_command(
+            root.prompt_launch_command,
+            'prompt_launch_command',
+        );
+        const prompt_resume_launch_command = validate_optional_prompt_launch_command(
+            root.prompt_resume_launch_command,
+            'prompt_resume_launch_command',
+        );
+        if (prompt_resume_launch_command !== undefined && prompt_launch_command === undefined) {
+            fail(
+                'prompt_resume_launch_command',
+                'requires prompt_launch_command when set',
+            );
+        }
         const validation = validate_validation_block(root.validation);
         const extractable_artifacts = validate_extractable_artifacts(
             root.extractable_artifacts,
@@ -217,6 +233,8 @@ export function parse_manifest(
             dockerfile,
             authentication,
             launch_command,
+            prompt_launch_command,
+            prompt_resume_launch_command,
             validation,
             extractable_artifacts,
             overrides_builtin,

@@ -113,3 +113,11 @@ export function resolve_apply_mode(raw: string | boolean | undefined): Apply_Mod
     throw new Error(`--merge expects "commit" or "squash", got: ${raw}`);
 }
 
+/** Commander accumulator for repeatable `--passthrough <token>`. */
+export function collect_passthrough(value: string, previous: string[]): string[] {
+    if (value === '') {
+        throw new InvalidArgumentError('--passthrough requires a token value.');
+    }
+    return [...previous, value];
+}
+

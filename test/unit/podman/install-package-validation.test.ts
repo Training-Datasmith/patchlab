@@ -8,7 +8,7 @@
  * re-open the hole.
  */
 import { describe, it, expect } from 'vitest';
-import { install_package } from '../../../src/podman.js';
+import { install_package } from '../../../src/container_runtime.js';
 
 /**
  * Capture and classify whatever `install_package` does on the supplied input.

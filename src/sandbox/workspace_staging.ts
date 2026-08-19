@@ -25,9 +25,12 @@ import { globSync } from 'glob';
 import picomatch from 'picomatch';
 import {
     CONTAINER_WORKING_DIR,
+    copy_into_workspace,
     copy_to_container,
     exec_container,
-} from '../podman.js';
+    fix_workspace_ownership_if_needed,
+    runtime_host_tmpdir,
+} from '../container_runtime.js';
 import { copy_path_recursively } from '../context.js';
 import { stage_symlink_within_root } from '../symlink_compatibility.js';
 import { logger } from '../logger.js';
@@ -427,7 +430,7 @@ export function copy_multi_source_files(
             continue;
         }
         const real_root = fs.realpathSync(entry.host_path);
-        const staging_directory = fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-staging-'));
+        const staging_directory = fs.mkdtempSync(path.join(runtime_host_tmpdir(), 'patchlab-staging-'));
         try {
             for (const relative_path of files) {
                 stage_one_source_file(entry, relative_path, sources, options, staging_directory, real_root);
@@ -437,6 +440,7 @@ export function copy_multi_source_files(
                 : `${working_directory}/${entry.mount_name}`;
             exec_container(name, ['mkdir', '-p', container_target]);
             copy_to_container(name, staging_directory + '/.', container_target);
+            fix_workspace_ownership_if_needed(name, container_target);
         } finally {
             fs.rmSync(staging_directory, { recursive: true, force: true });
         }
@@ -622,7 +626,9 @@ export function overlay_into_container(
         return;
     }
 
+    fix_workspace_ownership_if_needed(container_name, working_directory);
     copy_to_container(container_name, staging_directory + '/.', working_directory);
+    fix_workspace_ownership_if_needed(container_name, working_directory);
 }
 
 /**
@@ -721,9 +727,9 @@ function directory_contains_secret(directory_path: string, visited: Set<string>)
  * with cycle detection) so that copying `~/.aws` (which contains `credentials`)
  * is caught even though the directory path itself does not match
  * `**\/.aws\/credentials`. Sources that do not exist are skipped (they will be
- * warned about in `copy_additional_paths`). Called by `provision_new_sandbox`
- * before container creation so the prompter can gate and the image tier can
- * apply the auth tag.
+ * warned about in `copy_additional_paths`). Called by create and resume before
+ * container creation so the prompter can gate and the image tier can apply the
+ * auth tag.
  */
 export function detect_secret_copies(copy_paths: Copy_Specification[]): string[] {
     return copy_paths
@@ -758,16 +764,16 @@ export function copy_additional_paths(
         return;
     }
 
-    const staging_directory = fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-copies-'));
-    try {
-        for (const specification of copy_paths) {
-            if (!fs.existsSync(specification.source_path)) {
-                logger().warn(
-                    `Warning: --copy source does not exist; skipping: ${specification.source_path}`
-                );
-                continue;
-            }
+    for (const specification of copy_paths) {
+        if (!fs.existsSync(specification.source_path)) {
+            logger().warn(
+                `Warning: --copy source does not exist; skipping: ${specification.source_path}`
+            );
+            continue;
+        }
 
+        const staging_directory = fs.mkdtempSync(path.join(runtime_host_tmpdir(), 'patchlab-copy-one-'));
+        try {
             const staging_destination = path.join(staging_directory, specification.destination);
             fs.mkdirSync(path.dirname(staging_destination), { recursive: true });
 
@@ -776,24 +782,27 @@ export function copy_additional_paths(
                 : path.dirname(specification.source_path);
 
             copy_path_recursively(specification.source_path, staging_destination, containing_root);
-        }
 
-        if (fs.readdirSync(staging_directory).length > 0) {
-            copy_to_container(container_name, staging_directory + '/.', working_directory);
+            const host_source = fs.lstatSync(staging_destination).isDirectory()
+                ? `${staging_destination}/.`
+                : staging_destination;
+            copy_into_workspace(container_name, host_source, working_directory, specification.destination);
+        } finally {
+            fs.rmSync(staging_directory, { recursive: true, force: true });
         }
-    } finally {
-        fs.rmSync(staging_directory, { recursive: true, force: true });
     }
 }
 
 export function initialize_sandbox_git_baseline(container_name: string, working_directory: string): void {
-    exec_container(container_name, ['git', 'init'], { cwd: working_directory });
-    exec_container(container_name, ['git', 'config', 'core.autocrlf', 'false'], { cwd: working_directory });
-    exec_container(container_name, ['git', 'config', 'core.eol', 'lf'], { cwd: working_directory });
-    exec_container(container_name, ['git', 'config', 'user.email', 'patchlab@local'], { cwd: working_directory });
-    exec_container(container_name, ['git', 'config', 'user.name', 'patchlab'], { cwd: working_directory });
-    exec_container(container_name, ['git', 'add', '-A'], { cwd: working_directory });
-    exec_container(container_name, ['git', 'commit', '-m', 'baseline', '--allow-empty'], { cwd: working_directory });
+    fix_workspace_ownership_if_needed(container_name, working_directory);
+    const exec_options = { cwd: working_directory };
+    exec_container(container_name, ['git', 'init'], exec_options);
+    exec_container(container_name, ['git', 'config', 'core.autocrlf', 'false'], exec_options);
+    exec_container(container_name, ['git', 'config', 'core.eol', 'lf'], exec_options);
+    exec_container(container_name, ['git', 'config', 'user.email', 'patchlab@local'], exec_options);
+    exec_container(container_name, ['git', 'config', 'user.name', 'patchlab'], exec_options);
+    exec_container(container_name, ['git', 'add', '-A'], exec_options);
+    exec_container(container_name, ['git', 'commit', '-m', 'baseline', '--allow-empty'], exec_options);
 }
 
 /**

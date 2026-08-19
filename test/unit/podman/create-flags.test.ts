@@ -12,7 +12,7 @@ vi.mock('node:child_process', () => ({
 }));
 
 import { execFileSync } from 'node:child_process';
-import { create_container } from '../../../src/podman.js';
+import { create_container } from '../../../src/container_runtime.js';
 
 const mocked_exec = vi.mocked(execFileSync);
 

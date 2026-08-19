@@ -4,7 +4,7 @@ import {
     assert_valid_patchlab_id,
     build_archive_path,
 } from '../../../src/archive.js';
-import { container_name_for } from '../../../src/podman.js';
+import { container_name_for } from '../../../src/container_runtime.js';
 import { make_temporary_index_path, patchlab_branch_name } from '../../../src/branch/index.js';
 
 describe('assert_valid_patchlab_id (CLI trust boundary)', () => {

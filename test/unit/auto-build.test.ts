@@ -58,7 +58,7 @@ describe('ensure_default_image', () => {
 
         expect(result).toBe('patchlab/node-22-slim:latest');
         expect(mock_build_image).not.toHaveBeenCalled();
-        expect(mock_get_default_image).toHaveBeenCalledWith(DEFAULT_TEST_TOOL, []);
+        expect(mock_get_default_image).toHaveBeenCalledWith(DEFAULT_TEST_TOOL, [], 'node:22-slim');
     });
 
     it('auto-builds when no compatible image exists', async () => {
@@ -146,7 +146,7 @@ describe('ensure_default_image', () => {
             '/some/project',
             { tool: DEFAULT_TEST_TOOL },
         );
-        expect(mock_get_default_image).toHaveBeenCalledWith(DEFAULT_TEST_TOOL, []);
+        expect(mock_get_default_image).toHaveBeenCalledWith(DEFAULT_TEST_TOOL, [], 'node:22-slim');
         expect(mock_build_image).toHaveBeenCalledWith({
             project_directory: '/some/project',
             capabilities: [],

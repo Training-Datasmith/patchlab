@@ -42,6 +42,32 @@ launch_command:
 
 After saving, run `patchlab list-tools` to confirm it registered, then `patchlab create --tool aider <source>` to dispatch to it.
 
+### Prompt launch (`-p`)
+
+To support `patchlab create|resume -p`, declare `prompt_launch_command` with a `{{prompt}}` placeholder. Use `--` before `{{prompt}}` when prompts may start with `-`:
+
+```yaml
+# ~/.patchlab/tools/aider-prompt.yaml
+name: aider
+display_name: Aider
+image_user: patchlab
+base_image: docker.io/library/python:3.12-slim
+authentication:
+  method: environment_variables
+  variable_names:
+    - OPENAI_API_KEY
+launch_command:
+  - aider
+  - --yes
+prompt_launch_command:
+  - aider
+  - --yes
+  - --message
+  - '{{prompt}}'
+```
+
+`--passthrough` is supported by the built-in OpenCode provider only. YAML authors embed static flags in `launch_command` / `prompt_launch_command` instead.
+
 ### Plain shell (no AI tool)
 
 If you just want an isolated sandbox with the source tree mounted and no AI tool installed, a five-field manifest gets you there:
@@ -78,6 +104,8 @@ The full schema is documented in [`configured-tool-provider.md`](configured-tool
 | `dockerfile.environment` | no | `ENV` directives baked into the image. |
 | `authentication` | yes | `none`, `environment_variables`, or `file_copy`. See below. |
 | `launch_command` | yes | argv array invoked inside the container. Exec-form (no shell). |
+| `prompt_launch_command` | no | argv for `patchlab create|resume -p`; at least one token must contain `{{prompt}}`. |
+| `prompt_resume_launch_command` | no | argv override for `patchlab resume -p`; requires `prompt_launch_command`. |
 | `validation` | no | Optional command run as a sanity check inside the built image. |
 | `extractable_artifacts` | no | Files/directories to extract into the session archive on exit. |
 | `overrides_builtin` | no | `true` to shadow a built-in provider with the same `name`. Default `false`. |
@@ -124,7 +152,7 @@ Per-copy failures log a warning and continue — partial auth is more useful tha
 
 ## Shadowing a registered built-in
 
-Patchlab currently ships no built-in tool providers, but the registry still supports code-defined providers registered at module load (for example in downstream forks). If a built-in with the same `name` is registered, a manifest is rejected by default. To intentionally replace it with a configured provider, set `overrides_builtin: true`:
+Patchlab ships **OpenCode** as a built-in tool provider (`name: opencode`). It is the default for `patchlab create` when `--tool` is omitted. See [opencode.md](opencode.md). The registry also supports code-defined providers registered at module load (for example in downstream forks). If a built-in with the same `name` is registered, a manifest is rejected by default. To intentionally replace it with a configured provider, set `overrides_builtin: true`:
 
 ```yaml
 name: my-built-in-tool
@@ -205,6 +233,12 @@ The flags have NO effect in TTY mode — interactive prompting is always the rig
 - `patchlab apply <patchlab>` — pure git operation (cherry-pick / merge / squash). No `get_provider` or `get_launch_command`.
 
 The trust gate fires only when patchlab is about to *run* user code — `create` and `resume`.
+
+### Per-repository `default_tool` preferences (separate from manifest trust)
+
+Repositories may set `default_tool` in `<repository_root>/.patchlab/configuration.yaml`. When that value conflicts with your user-global / built-in fallback, patchlab shows a three-way picker (repository default, your default, abort). Preferences are stored under `~/.patchlab/default-tool-preferences/`, not in the repository and not in `trusted-sources/`.
+
+Non-interactive opt-in uses `--allow-untrusted-default-tool` / `PATCHLAB_ALLOW_UNTRUSTED_DEFAULT_TOOL=1` — separate from `--allow-untrusted-manifests`. See [configuration.md](configuration.md).
 
 ## Multi-repository patchlabs
 

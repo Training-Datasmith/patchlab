@@ -12,7 +12,7 @@
  * source-text invariants matter.
  */
 import { describe, it, expect } from 'vitest';
-import { exec_interactive } from '../../../src/podman.js';
+import { exec_interactive } from '../../../src/container_runtime.js';
 
 /**
  * Vitest runs sources through Vite's SSR transform, which normalizes single
@@ -26,11 +26,14 @@ function contains_quoted(source: string, literal: string): boolean {
 describe('exec_interactive — structural lock on argv composition', () => {
     const source = exec_interactive.toString();
 
-    it('composes `podman exec -it -w <cwd> <name> <command...>`', () => {
-        expect(contains_quoted(source, 'podman')).toBe(true);
+    it('composes `exec [-it] -u <user> -w <cwd> <name> <command...>` via exec_runtime', () => {
         expect(contains_quoted(source, 'exec')).toBe(true);
         expect(contains_quoted(source, '-it')).toBe(true);
+        expect(source).toContain('isTTY');
+        expect(contains_quoted(source, '-u')).toBe(true);
+        expect(source).toContain('container_home_user');
         expect(contains_quoted(source, '-w')).toBe(true);
+        expect(source).toContain('exec_runtime');
     });
 
     it('uses stdio: inherit so the parent TTY drives the container', () => {

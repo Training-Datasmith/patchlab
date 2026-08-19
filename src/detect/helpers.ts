@@ -6,9 +6,9 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { execFileSync } from 'node:child_process';
 import { parse as parse_yaml } from 'yaml';
 import { logger } from '../logger.js';
+import { resolve_runtime_socket_path } from '../container_runtime.js';
 import type {
     Environment_Variable_Requirement,
     Requirement_Source,
@@ -16,9 +16,11 @@ import type {
     Volume_Mount_Requirement,
 } from './types.js';
 
-/** Resolve the Podman socket path for the current platform.
- *  On Linux: /run/podman/podman.sock or /run/user/{uid}/podman/podman.sock
- *  On Windows (WSL): query `podman info` for the remote socket path
+/** Resolve the container runtime socket path for the current platform.
+ *  Delegates to the active runtime adapter in `container_runtime/registry.ts`:
+ *    - Podman on Linux: `/run/podman/podman.sock` or `/run/user/{uid}/podman/podman.sock`
+ *    - Podman on Windows/macOS (WSL/VM): `podman info` → `Host.RemoteSocket.Path`
+ *    - nerdctl via Lima: containerd socket inside the VM (`/run/user/{uid}/containerd/containerd.sock`)
  */
 let _cached_socket_path: string | null = null;
 export function resolve_podman_socket_path(): string {
@@ -26,15 +28,7 @@ export function resolve_podman_socket_path(): string {
         return _cached_socket_path;
     }
 
-    try {
-        const output = execFileSync('podman', ['info', '--format', '{{.Host.RemoteSocket.Path}}'], {
-            stdio: 'pipe',
-        }).toString('utf-8').trim();
-        _cached_socket_path = output.replace(/^unix:\/\//, '');
-    } catch (_podman_info_failed) {
-        _cached_socket_path = '/run/podman/podman.sock';
-    }
-
+    _cached_socket_path = resolve_runtime_socket_path();
     return _cached_socket_path;
 }
 

@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { build_session_path } from './archive.js';
-import { copy_to_container, exec_container } from './podman.js';
+import { copy_to_container, exec_container } from './container_runtime.js';
 import { stage_symlink_within_root } from './symlink_compatibility.js';
 import { host_is_case_insensitive } from './path_containment.js';
 
@@ -93,6 +93,88 @@ function compute_archive_relative_path(
         return path.basename(expanded_path);
     }
     return relative.replaceAll('\\', '/');
+}
+
+export interface Prompt_File_Staging_Result {
+    merged_context_paths: string[];
+    container_files: string[];
+}
+
+/**
+ * Resolve `--prompt-file` paths for staging and OpenCode `--file` argv.
+ * Fail-closed: missing paths, directories, and destination collisions with
+ * `--context` or other prompt files all throw.
+ */
+export function resolve_prompt_file_staging(
+    prompt_file_paths: readonly string[],
+    context_paths: readonly string[],
+    image_home: string,
+    base_directory: string = process.cwd(),
+): Prompt_File_Staging_Result {
+    if (prompt_file_paths.length === 0) {
+        return {
+            merged_context_paths: [...context_paths],
+            container_files: [],
+        };
+    }
+
+    const context_resolution = resolve_context_paths([...context_paths], base_directory);
+    const claimed = new Map<string, string>();
+    for (const entry of context_resolution.entries) {
+        const conflict_key = host_is_case_insensitive()
+            ? entry.archive_relative_path.toLowerCase()
+            : entry.archive_relative_path;
+        claimed.set(conflict_key, entry.source_path);
+    }
+
+    const container_files: string[] = [];
+    const prompt_host_paths: string[] = [];
+
+    for (const input_path of prompt_file_paths) {
+        const expanded = expand_user_home(input_path);
+        const resolved_source = path.isAbsolute(expanded)
+            ? path.resolve(expanded)
+            : path.resolve(base_directory, expanded);
+
+        if (!fs.existsSync(resolved_source)) {
+            throw new Prompt_File_Staging_Error(`--prompt-file path does not exist: ${input_path}`);
+        }
+        const stat = fs.lstatSync(resolved_source);
+        if (stat.isDirectory()) {
+            throw new Prompt_File_Staging_Error(`--prompt-file must be a file, not a directory: ${input_path}`);
+        }
+
+        const archive_relative = compute_archive_relative_path(expanded, base_directory);
+        const conflict_key = host_is_case_insensitive()
+            ? archive_relative.toLowerCase()
+            : archive_relative;
+        const previous_source = claimed.get(conflict_key);
+        if (previous_source !== undefined && previous_source !== resolved_source) {
+            throw new Prompt_File_Staging_Error(
+                `--prompt-file '${input_path}' resolves to context destination '${archive_relative}' `
+                + `which is already used by '${previous_source}'.`,
+            );
+        }
+        claimed.set(conflict_key, resolved_source);
+        prompt_host_paths.push(resolved_source);
+        container_files.push(`${image_home}/context/${archive_relative}`);
+    }
+
+    const merged = [...context_paths];
+    for (const host_path of prompt_host_paths) {
+        if (!merged.includes(host_path)) {
+            merged.push(host_path);
+        }
+    }
+
+    return { merged_context_paths: merged, container_files };
+}
+
+export class Prompt_File_Staging_Error extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'Prompt_File_Staging_Error';
+    }
 }
 
 /**

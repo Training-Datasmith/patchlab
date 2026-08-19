@@ -94,7 +94,11 @@ export function make_fake_prompter(answers: Fake_Prompter_Answers): Prompter {
             }
             throw new Prompter_Exhausted('confirm', confirm_index);
         },
-        choose: async (message: string, options: string[]): Promise<number | null> => {
+        choose: async (
+            message: string,
+            options: string[],
+            _choose_options?: { cancel_label?: string },
+        ): Promise<number | null> => {
             if (Array.isArray(choose_source)) {
                 if (choose_index >= choose_source.length) {
                     throw new Prompter_Exhausted('choose', choose_index);

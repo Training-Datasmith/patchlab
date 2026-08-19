@@ -4,21 +4,32 @@
 # for breadth (multi-OS, sharded integration) rather than minute-frugality.
 #
 # Jobs:
-#   build-and-typecheck — `tsc` over `src/` (the shipped package) and over
+#   build-and-typecheck — `npm ci`, dependency audits (`audit:prod`, `audit`),
+#       `tsc` over `src/` (the shipped package) and over
 #       `src/` + `test/` (the test-only type-check gate added in
 #       `tsconfig.tests.json`). Fast, OS-independent, no podman needed.
-#   test-unit — vitest `unit` + `windows` projects, on Ubuntu AND Windows.
+#   test-unit — vitest `unit` + `windows` + `macos` projects, on Ubuntu AND Windows.
 #       The `windows` project self-gates with `process.platform !== 'win32'`
 #       so it is inert on Ubuntu; running it on `windows-latest` is the
-#       only place its assertions actually fire.
+#       only place its assertions actually fire. The `macos` project self-
+#       gates on non-darwin hosts and is inert on Ubuntu/Windows runners.
+#   test-macos-platform — vitest `unit` + `macos` on macos-latest (real APFS,
+#       no Lima required).
+#   test-macos-nerdctl — vitest `integration` + `integration-nerdctl` on
+#       macos-latest with Lima/nerdctl, runtime assertion, timeout, and Lima
+#       diagnostics upload on failure.
 #   test-posix — vitest `posix` project on Ubuntu. The local
-#       `npm run test:posix` script wraps this in a podman container to
-#       borrow Linux filesystem semantics on Windows hosts; on a Linux
-#       runner the indirection is unnecessary — execute the project
-#       natively.
+#       `npm run test:posix` script wraps this in a Linux container on
+#       Windows and macOS hosts; on a Linux runner the indirection is
+#       unnecessary — execute the project natively.
 #   test-integration — vitest `integration` project, sharded across four
 #       runners. See the comment on that job for why CI can parallelize
 #       what a single developer machine cannot.
+#   verify-npm-pack — `npm pack` from a tree with no dist/ (prepack builds),
+#       install the tarball in a temp prefix, and run `patchlab --version`
+#       from a foreign cwd.
+#   verify:integration-cleanup — after integration jobs, fail when patchlab
+#       containers or archives remain under PATCHLAB_HOME.
 #
 # Jobs intentionally do not declare `needs:` dependencies on each other.
 # On a public repo the minute cost is zero, and surfacing every failure
@@ -40,34 +51,64 @@ concurrency:
 
 jobs:
   build-and-typecheck:
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20, 24]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci
+      - run: npm run audit:prod
+      - run: npm run audit
       - run: npm run build
       - run: npm run typecheck:tests
+
+  verify-npm-pack:
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20, 24]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      - run: npm run verify:pack
 
   test-unit:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            node-version: 20
+          - os: ubuntu-latest
+            node-version: 24
+          - os: windows-latest
+            node-version: 24
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci
-      # Run both projects on both OSes. The `windows` project's assertions
-      # short-circuit on non-Windows, so on Ubuntu this is effectively just
-      # the `unit` project.
-      - run: npx vitest run --project unit --project windows
+      - run: npm run build
+      # Run all three platform-gated projects on both OSes. The `windows`
+      # and `macos` projects self-gate on the wrong platform, so on Ubuntu
+      # this is effectively just the `unit` project.
+      - run: npx vitest run --project unit --project windows --project macos
+        env:
+          PATCHLAB_CONTAINER_RUNTIME: podman
 
   test-posix:
     runs-on: ubuntu-latest
@@ -78,10 +119,13 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: npm run build
       # Run the posix project directly — `npm run test:posix`'s podman
       # wrapper is for Windows hosts that need Linux FS semantics. We are
       # already on Linux.
       - run: npx vitest run --project posix
+        env:
+          PATCHLAB_CONTAINER_RUNTIME: podman
 
   test-integration:
     # Four-way shard. Local developer machines must run integration files
@@ -108,9 +152,84 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: npm run build
       # Ubuntu runners ship with podman pre-installed; verify it is callable
       # before launching the integration suite so a missing-runtime failure
       # surfaces here rather than as a cryptic test error.
       - name: Verify podman runtime
         run: podman --version
-      - run: npx vitest run --project integration --shard=${{ matrix.shard }}/4
+      - run: npx vitest run --project integration --project integration-podman --shard=${{ matrix.shard }}/4
+        env:
+          PATCHLAB_CONTAINER_RUNTIME: podman
+          PATCHLAB_HOME: ${{ runner.temp }}/patchlab-integration-home
+      - name: Verify integration cleanup
+        if: always()
+        run: npm run verify:integration-cleanup
+        env:
+          PATCHLAB_CONTAINER_RUNTIME: podman
+          PATCHLAB_HOME: ${{ runner.temp }}/patchlab-integration-home
+
+  test-macos-platform:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npx vitest run --project unit --project macos
+
+  test-macos-nerdctl:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install Lima and start default VM
+        run: |
+          brew install lima
+          limactl start --tty=false default || limactl start --tty=false
+      - name: Verify nerdctl runtime
+        run: |
+          nerdctl.lima --version
+          nerdctl.lima run --rm hello-world
+      - run: npm ci
+      - run: npm run build
+      - name: Assert nerdctl runtime selection
+        run: node scripts/assert-container-runtime.mjs nerdctl
+        env:
+          PATCHLAB_CONTAINER_RUNTIME: nerdctl
+          PATCHLAB_REQUIRED_CONTAINER_RUNTIME: nerdctl
+      - run: npx vitest run --project integration --project integration-nerdctl
+        env:
+          PATCHLAB_CONTAINER_RUNTIME: nerdctl
+          PATCHLAB_REQUIRED_CONTAINER_RUNTIME: nerdctl
+          PATCHLAB_HOME: ${{ runner.temp }}/patchlab-integration-home
+      - name: Verify integration cleanup
+        if: always()
+        run: npm run verify:integration-cleanup
+        env:
+          PATCHLAB_CONTAINER_RUNTIME: nerdctl
+          PATCHLAB_HOME: ${{ runner.temp }}/patchlab-integration-home
+      - name: Capture Lima diagnostics
+        if: failure() || cancelled()
+        run: |
+          mkdir -p lima-diagnostics
+          limactl list > lima-diagnostics/limactl-list.txt 2>&1 || true
+          limactl shell default -- nerdctl.lima info > lima-diagnostics/nerdctl-info.txt 2>&1 || true
+          if [ -f "$HOME/.lima/default/serial.log" ]; then
+            cp "$HOME/.lima/default/serial.log" lima-diagnostics/serial.log
+          fi
+      - name: Upload Lima diagnostics
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lima-diagnostics-${{ github.run_id }}
+          path: lima-diagnostics/
+          if-no-files-found: ignore

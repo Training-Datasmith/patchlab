@@ -17,9 +17,9 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
     copy_from_container,
-    copy_to_container,
+    copy_into_workspace,
     exec_container,
-} from '../podman.js';
+} from '../container_runtime.js';
 import { copy_path_recursively } from '../context.js';
 import { build_session_path } from '../archive.js';
 import { host_is_case_insensitive } from '../path_containment.js';
@@ -158,7 +158,7 @@ export function restore_workspace_copies(
         const container_parent = `${workspace_root}/${path.posix.dirname(normalized)}`;
 
         exec_container(container_name, ['mkdir', '-p', container_parent]);
-        copy_to_container(container_name, archive_path, container_path);
+        copy_into_workspace(container_name, archive_path, workspace_root, normalized);
     }
 }
 

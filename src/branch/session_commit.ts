@@ -23,10 +23,11 @@
  * and its semantics ("the fan-out is authoritative for its repositories") only
  * make sense in this file's context.
  */
+import { execFileSync, spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
-import { execFileSync, spawn } from 'node:child_process';
+import { exec_container, get_runtime_binary, copy_from_container } from '../container_runtime.js';
 import type { Transform } from 'node:stream';
 import { logger } from '../logger.js';
 import {
@@ -67,11 +68,7 @@ interface Sandbox_Diff_Probe {
  * filters the staged diff via a pathspec.
  */
 function stage_sandbox_changes(container_name: string, workspace: string): void {
-    execFileSync(
-        'podman',
-        ['exec', '--workdir', workspace, container_name, 'git', 'add', '-A'],
-        { stdio: ['ignore', 'pipe', 'pipe'] },
-    );
+    exec_container(container_name, ['git', 'add', '-A'], { cwd: workspace });
 }
 
 /**
@@ -105,33 +102,20 @@ function slice_repository_diff_in_sandbox(
         + 'git -c core.autocrlf=false -c core.quotePath=false diff --cached --binary HEAD > "$output_path"'
         : 'set -e; output_path="$1"; shift; '
         + 'git -c core.autocrlf=false -c core.quotePath=false diff --cached --binary HEAD -- "$@" > "$output_path"';
-    execFileSync(
-        'podman',
-        [
-            'exec', '--workdir', workspace, container_name,
-            'sh', '-c', script, 'patchlab-slice',
-            container_path,
-            ...pathspecs,
-        ],
-        { stdio: ['ignore', 'pipe', 'pipe'] },
+    exec_container(
+        container_name,
+        ['sh', '-c', script, 'patchlab-slice', container_path, ...pathspecs],
+        { cwd: workspace },
     );
 
-    const size_string = execFileSync(
-        'podman',
-        ['exec', container_name, 'stat', '-c', '%s', container_path],
-        { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf-8' },
-    );
+    const size_string = exec_container(container_name, ['stat', '-c', '%s', container_path]);
     const size_bytes = Number.parseInt(size_string.trim(), 10);
     return { size_bytes, container_path };
 }
 
 function clean_up_sandbox_diff_temporary_file(container_name: string, container_path: string): void {
     try {
-        execFileSync(
-            'podman',
-            ['exec', container_name, 'rm', '-f', container_path],
-            { stdio: 'pipe' },
-        );
+        exec_container(container_name, ['rm', '-f', container_path]);
     } catch (_container_rm_failed) {
         /* best-effort */
     }
@@ -154,11 +138,7 @@ function copy_sandbox_diff_to_fallback(
     const directory = build_session_path(patchlab_id, session_number);
     fs.mkdirSync(directory, { recursive: true });
     const file_path = path.join(directory, `fallback.${fallback_basename}.patch`);
-    execFileSync(
-        'podman',
-        ['cp', `${container_name}:${container_path}`, file_path],
-        { stdio: 'pipe' },
-    );
+    copy_from_container(container_name, container_path, file_path);
     return file_path;
 }
 
@@ -217,7 +197,7 @@ export function stream_apply_from_sandbox(
 ): Promise<void> {
     return new Promise((resolve, reject) => {
         const cat = spawn(
-            'podman',
+            get_runtime_binary(),
             ['exec', container_name, 'cat', container_diff_path],
             { stdio: ['ignore', 'pipe', 'pipe'] }
         );
@@ -598,18 +578,11 @@ function build_repository_path_rewriter(
  * call to remain idempotent.
  */
 function advance_container_head(container_name: string, workspace: string): void {
-    execFileSync(
-        'podman',
-        ['exec', '--workdir', workspace, container_name, 'git', 'add', '-A'],
-        { stdio: ['ignore', 'pipe', 'pipe'] },
-    );
-    execFileSync(
-        'podman',
-        [
-            'exec', '--workdir', workspace, container_name,
-            'git', 'commit', '--allow-empty', '-m', 'patchlab: extracted to branch',
-        ],
-        { stdio: ['ignore', 'pipe', 'pipe'] },
+    exec_container(container_name, ['git', 'add', '-A'], { cwd: workspace });
+    exec_container(
+        container_name,
+        ['git', 'commit', '--allow-empty', '-m', 'patchlab: extracted to branch'],
+        { cwd: workspace },
     );
 }
 

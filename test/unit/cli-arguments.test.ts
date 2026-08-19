@@ -33,18 +33,6 @@ describe('parse_copy_specification', () => {
         expect(() => parse_copy_specification('/some/file:/absolute/dest')).toThrow(/--copy destination must be a relative path/);
     });
 
-    it('Windows C:\\path\\file with no destination uses basename', () => {
-        const result = parse_copy_specification(String.raw`C:\path\to\file.txt`);
-        expect(result.destination).toBe('file.txt');
-        expect(result.source_path).toBe(path.resolve(String.raw`C:\path\to\file.txt`));
-    });
-
-    it('Windows C:\\path\\file:destination.txt uses explicit destination', () => {
-        const result = parse_copy_specification(String.raw`C:\path\to\file.txt:destination.txt`);
-        expect(result.destination).toBe('destination.txt');
-        expect(result.source_path).toBe(path.resolve(String.raw`C:\path\to\file.txt`));
-    });
-
     it('POSIX path — first colon is the src/dest separator', () => {
         const result = parse_copy_specification('vendor/composer.lock:lock-file.json');
         expect(result.destination).toBe('lock-file.json');

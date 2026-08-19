@@ -14,7 +14,7 @@ import {
     container_running,
     exec_container,
     exec_container_capture_buffer,
-} from './podman.js';
+} from './container_runtime.js';
 import { get_provider, compute_container_workspace_path } from './tools/index.js';
 
 /**

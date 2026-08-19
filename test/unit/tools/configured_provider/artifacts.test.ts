@@ -3,6 +3,9 @@ import {
     validate_validation_block,
     validate_launch_command,
     validate_extractable_artifacts,
+    validate_optional_prompt_launch_command,
+    expand_prompt_launch_argv,
+    PROMPT_LAUNCH_PLACEHOLDER,
 } from '../../../../src/tools/configured_provider/artifacts.js';
 
 const MANIFEST_NAME = 'aider';
@@ -57,6 +60,42 @@ describe('validate_launch_command', () => {
 
     it('rejects non-string entries', () => {
         expect(() => validate_launch_command(['aider', 42])).toThrow();
+    });
+});
+
+describe('validate_optional_prompt_launch_command', () => {
+    it('returns undefined when omitted', () => {
+        expect(validate_optional_prompt_launch_command(undefined, 'prompt_launch_command')).toBeUndefined();
+    });
+
+    it('accepts argv containing the prompt placeholder', () => {
+        expect(validate_optional_prompt_launch_command(
+            ['my-tool', '--message', PROMPT_LAUNCH_PLACEHOLDER],
+            'prompt_launch_command',
+        )).toEqual(['my-tool', '--message', '{{prompt}}']);
+    });
+
+    it('rejects argv without the prompt placeholder', () => {
+        expect(() => validate_optional_prompt_launch_command(
+            ['my-tool', '--message', 'static'],
+            'prompt_launch_command',
+        )).toThrow(/must contain at least one/);
+    });
+});
+
+describe('expand_prompt_launch_argv', () => {
+    it('substitutes {{prompt}} tokens in argv elements', () => {
+        expect(expand_prompt_launch_argv(
+            ['my-tool', '--message', PROMPT_LAUNCH_PLACEHOLDER],
+            'fix tests',
+        )).toEqual(['my-tool', '--message', 'fix tests']);
+    });
+
+    it('substitutes multiple placeholders inside one token', () => {
+        expect(expand_prompt_launch_argv(
+            [`prefix-${PROMPT_LAUNCH_PLACEHOLDER}-suffix`],
+            'x',
+        )).toEqual(['prefix-x-suffix']);
     });
 });
 

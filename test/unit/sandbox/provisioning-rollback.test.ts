@@ -44,16 +44,20 @@ vi.mock('../../../src/sandbox/workspace_staging.js', () => ({
     prepare_workspace: vi.fn(),
 }));
 
-vi.mock('../../../src/podman.js', () => ({
-    DEFAULT_IMAGE: 'node:22-slim',
-    container_name_for: vi.fn((id: string) => `c-${id}`),
-    container_running: vi.fn(() => false),
-    create_container: vi.fn(),
-    query_running_containers: vi.fn(() => []),
-    start_container: vi.fn(),
-    stop_and_remove_container_best_effort: vi.fn(),
-    was_authentication_attempted_at_build: vi.fn(() => false),
-}));
+vi.mock('../../../src/container_runtime.js', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../../src/container_runtime.js')>();
+    return {
+        ...actual,
+        DEFAULT_IMAGE: 'node:22-slim',
+        container_name_for: vi.fn((id: string) => `c-${id}`),
+        container_running: vi.fn(() => false),
+        create_container: vi.fn(),
+        query_running_containers: vi.fn(() => []),
+        start_container: vi.fn(),
+        stop_and_remove_container_best_effort: vi.fn(),
+        was_authentication_attempted_at_build: vi.fn(() => false),
+    };
+});
 
 vi.mock('../../../src/sandbox/image_tier.js', () => ({
     resolve_effective_image: vi.fn(() => ({
@@ -98,24 +102,43 @@ vi.mock('../../../src/cgroups.js', () => ({
     warn_once_if_unsupported: vi.fn(),
 }));
 
-vi.mock('../../../src/tools/index.js', () => ({
-    compute_container_workspace_path: vi.fn(() => '/home/patchlab/workspace'),
-    get_provider: vi.fn(() => ({
-        image_specification: { image_home: '/home/patchlab' },
-        get_authentication_method: () => 'none',
-        inject_authentication: vi.fn(),
-        inject_session_state: vi.fn(),
+vi.mock('../../../src/tools/index.js', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../../src/tools/index.js')>();
+    return {
+        ...actual,
+        compute_container_workspace_path: vi.fn(() => '/home/patchlab/workspace'),
+        get_provider: vi.fn(() => ({
+            image_specification: { image_home: '/home/patchlab', image_user: 'patchlab' },
+            get_authentication_method: () => 'none',
+            inject_authentication: vi.fn(() => ({ type: 'none' })),
+            inject_session_state: vi.fn(),
+        })),
+        register_per_source_manifests: vi.fn(() => ({
+            manifest_buffers: new Map(),
+            registered_manifests: [],
+            registered_manifest_repositories: [],
+            errors: [],
+        })),
+    };
+});
+
+vi.mock('../../../src/sandbox/host_access.js', () => ({
+    prepare_provider_host_access: vi.fn(async () => ({
+        extra_hosts: [],
+        extra_environment_variables: {},
+        file_copies: [],
+        stop: async () => {},
     })),
-    register_per_source_manifests: vi.fn(() => ({
-        manifest_buffers: new Map(),
-        registered_manifests: [],
-        registered_manifest_repositories: [],
-        errors: [],
-    })),
+    inject_provider_host_files: vi.fn(),
+    stop_prepared_host_access: vi.fn(async () => {}),
 }));
 
 vi.mock('../../../src/tools/configured_provider/trust_verification.js', () => ({
     verify_per_source_trust_multi_repository: vi.fn(),
+}));
+
+vi.mock('../../../src/local_model_proxy/manager.js', () => ({
+    stop_host_proxy: vi.fn(),
 }));
 
 import {
@@ -123,7 +146,9 @@ import {
     execute_phase_2_mutations,
     rollback_phase_2_created_branches,
 } from '../../../src/sandbox/branch_handshake.js';
-import { stop_and_remove_container_best_effort } from '../../../src/podman.js';
+import { stop_and_remove_container_best_effort } from '../../../src/container_runtime.js';
+import { stop_prepared_host_access } from '../../../src/sandbox/host_access.js';
+import { stop_host_proxy } from '../../../src/local_model_proxy/manager.js';
 import { create_sandbox } from '../../../src/sandbox/index.js';
 import { build_archive_path } from '../../../src/archive.js';
 import { install_isolated_home_hooks } from '../../helpers/home_directory.js';
@@ -195,7 +220,7 @@ describe('create_sandbox rollback paths', () => {
         mocked_rollback_branches.mockImplementation((repositories, patchlab_id) => {
             snapshot.push({ repositories: [...repositories], patchlab_id });
         });
-        const { create_container } = await import('../../../src/podman.js');
+        const { create_container } = await import('../../../src/container_runtime.js');
         vi.mocked(create_container).mockImplementation(() => {
             throw new Error('create_container failed');
         });
@@ -214,5 +239,27 @@ describe('create_sandbox rollback paths', () => {
         expect(snapshot[0].repositories).toEqual([source_directory]);
         const patchlab_id = snapshot[0].patchlab_id;
         expect(fs.existsSync(build_archive_path(patchlab_id))).toBe(false);
+    });
+
+    it('stops prepared host access when provision_new_sandbox throws', async () => {
+        mocked_phase_2.mockImplementation((_repositories, _id, _dirty, created_branch_repositories) => {
+            created_branch_repositories.push(source_directory);
+            return {
+                baseline_commit_shas: { [source_directory]: null },
+                branch_creation_point_shas: { [source_directory]: null },
+            };
+        });
+        const { create_container } = await import('../../../src/container_runtime.js');
+        vi.mocked(create_container).mockImplementation(() => {
+            throw new Error('create_container failed');
+        });
+
+        await expect(create_sandbox(
+            [{ host_path: source_directory, repository_root: source_directory, source_prefix: '', mount_name: '' }],
+            { tool: DEFAULT_TEST_TOOL },
+        )).rejects.toThrow(/create_container failed/);
+
+        expect(stop_prepared_host_access).toHaveBeenCalled();
+        expect(stop_host_proxy).toHaveBeenCalled();
     });
 });

@@ -1,13 +1,30 @@
 # Testing strategy
 
-Patchlab's test suite is partitioned into four [Vitest](https://vitest.dev) projects, each with a different cost profile. Choosing the right project for a new test matters because the project's cost is paid by every test it contains — a unit test that has been miscategorized as integration silently taxes every CI run with podman serialization for no podman-coverage upside.
+Patchlab's test suite is partitioned into five [Vitest](https://vitest.dev) projects, each with a different cost profile. Choosing the right project for a new test matters because the project's cost is paid by every test it contains — a unit test that has been miscategorized as integration silently taxes every CI run with podman serialization for no podman-coverage upside.
 
 | Project | Location | Parallelism | Setup cost per file | Typical contents |
 | ------- | -------- | ----------- | ------------------- | ---------------- |
 | `unit` | `test/unit/**/*.test.ts` | Full file-level parallelism | Negligible | Host-side filesystem, validators, manifest field shapes, returned-string contracts, pure functions |
-| `integration` | `test/integration/**/*.test.ts` | **Sequential** (`fileParallelism: false`) | One shared podman runtime per worker via [`test/integration/setup-podman.ts`](../test/integration/setup-podman.ts) | Container lifecycle, in-container filesystem state, image-label round-trips, podman-stdio-pipe byte handling, CLI subprocess tests |
-| `posix` | `test/posix/**/*.test.ts` | File-level parallelism, runs inside a Linux container on Windows hosts | Linux container startup | Fifo/socket types, case-sensitive `.YAML` vs `.yaml`, unprivileged symlinks, executable mode bits surviving `tar` round-trip |
-| `windows` | `test/windows/**/*.test.ts` | File-level parallelism, no-op on POSIX hosts via self-gating | None on POSIX; native on Windows | NTFS junctions, drive-letter handling, separator-mixing on Windows-shaped paths |
+| `integration` | `test/integration/**/*.test.ts` (excluding `podman/` and `nerdctl/`) | **Sequential** (`fileParallelism: false`) | One shared container runtime per worker via [`test/integration/set-up-podman.ts`](../test/integration/set-up-podman.ts) | Container lifecycle, image-label round-trips, built-in OpenCode (`opencode/`), CLI subprocess tests |
+| `integration-podman` | `test/integration/podman/**/*.test.ts` | Sequential | Same setup as `integration` | Host-native podman socket mount, in-sandbox podman exec |
+| `integration-nerdctl` | `test/integration/nerdctl/**/*.test.ts` | Sequential | Same setup as `integration` | Lima/nerdctl commit rebuild, workspace ownership after nerdctl cp |
+| `posix` | `test/posix/**/*.test.ts` | File-level parallelism; runs inside a Linux container on Windows and macOS hosts | Linux container startup | Fifo/socket types, case-sensitive `.YAML` vs `.yaml`, unprivileged symlinks, executable mode bits surviving `tar` round-trip |
+| `windows` | `test/windows/**/*.test.ts` | File-level parallelism; native on Windows only (`npm test` omits this project on macOS) | Native on Windows | NTFS junctions, drive-letter handling, separator-mixing on Windows-shaped paths |
+| `macos` | `test/macos/**/*.test.ts` | File-level parallelism; native on macOS only (`npm test` omits this project on Windows) | Native on macOS | APFS case-insensitivity with production-default path comparison |
+
+[`scripts/run-tests.mjs`](../scripts/run-tests.mjs) selects projects by host OS and probes container runtimes via [`scripts/container-runtime-probe.mjs`](../scripts/container-runtime-probe.mjs). Linux runs unit, posix, and platform-gated projects natively; macOS runs unit + macos; Windows runs unit + windows; posix runs in a Linux container on macOS/Windows. Integration runs only when a runtime responds to `--version`: runtime-agnostic tests use nerdctl when available on macOS, otherwise podman; `integration-podman` runs when podman is available; `integration-nerdctl` runs when nerdctl is available on macOS. CI also runs a dedicated `test-macos-nerdctl` job on `macos-latest` (Lima + nerdctl) so the `macos` project and nerdctl integration suite execute on a real APFS host. Platform projects still self-gate when invoked directly (e.g. Linux CI runs both with `--project windows --project macos` and they no-op via `describe.runIf`).
+
+### Podman vs nerdctl integration coverage
+
+| Area | `test/integration/podman/` | `test/integration/nerdctl/` | Runtime-agnostic `test/integration/` |
+| ---- | -------------------------- | ----------------------------- | -------------------------------------- |
+| In-sandbox nested podman via host socket | `sandbox-podman.test.ts` | *(no equivalent — Lima/containerd differs)* | — |
+| Detect → auto socket mount pipeline | `detect-socket-provisioning.test.ts` (podman socket path) | — | — |
+| `commit_container` label round-trip | via podman `-c LABEL` in `image-lifecycle.test.ts` | `runtime-commit-labels.test.ts` (rebuild path) | `image-lifecycle.test.ts` |
+| Host→container workspace copy + git | — | `runtime-workspace-git.test.ts` (ownership repair) | `sandbox.test.ts`, `copy_paths.test.ts` |
+| Built-in OpenCode image + sandbox | — | — | `opencode/opencode.test.ts` |
+
+Add nerdctl-only tests under `test/integration/nerdctl/` when the assertion depends on Lima-visible paths, nerdctl cp staging, or the commit rebuild path. Add podman-only tests under `test/integration/podman/` for host-socket and in-container podman behavior.
 
 The integration suite's sequential-files constraint exists because `create_sandbox`, `destroy_sandbox`, and `commit_session_to_branch` all talk to the same podman daemon — concurrent file execution would race on container names and image layers. The constraint is correct for files that genuinely depend on podman state. It is wasteful for files that don't.
 
@@ -23,7 +40,8 @@ Decide by what your test's PRODUCER→ASSERTION chain actually touches, not by w
     - Byte-level traffic over the podman exec pipe (binary diffs ≥ 1 MB, UTF-8 multi-byte, executable mode bits surviving `git archive | tar -x`).
     - CLI subprocess tests that spawn `dist/cli.js` for any subcommand other than `apply` or `--help` — these hit the `preAction → ensure_podman(prompter)` gate at [src/cli.ts:497](../src/cli.ts#L497) and cannot reach the assertion without a working podman runtime.
 - A test belongs in `test/posix/` if its assertion depends on POSIX-only filesystem semantics that Windows hosts cannot reproduce.
-- A test belongs in `test/windows/` if its assertion depends on Windows-only filesystem semantics. The test must self-gate with `if (process.platform !== 'win32') return;` so the suite is a no-op on POSIX hosts.
+- A test belongs in `test/windows/` if its assertion depends on Windows-only filesystem semantics. The test must self-gate with `describe.runIf(process.platform === 'win32')` so direct invocations on Linux/macOS are a no-op ( `npm test` on macOS does not include this project).
+- A test belongs in `test/macos/` if its assertion depends on macOS-only filesystem semantics (APFS case-insensitivity with production-default path flags). The test must self-gate with `describe.runIf(process.platform === 'darwin')` so direct invocations on Linux/Windows are a no-op (`npm test` on Windows does not include this project).
 
 #### Prompt-driven library functions
 
@@ -33,7 +51,7 @@ Library functions that accept `Prompter | null` (the seam created by [src/prompt
 
 A test whose ASSERTION is host-side BUT whose PRODUCER step crosses the host↔container boundary belongs in `test/integration/`, not unit. The host-side shape of the assertion is a downstream artifact of the producer's correctness; moving the assertion-side to unit removes the producer and the test has nothing to inspect.
 
-**Canonical example.** [test/integration/sandbox-podman.test.ts:111-129](../test/integration/sandbox-podman.test.ts#L111) reads the `biz.ecartz.patchlab.capabilities` label off a host image:
+**Canonical example.** [test/integration/podman/sandbox-podman.test.ts:111-129](../test/integration/podman/sandbox-podman.test.ts#L111) reads the `biz.ecartz.patchlab.capabilities` label off a host image:
 
 ```ts
 it('image has capabilities label with expected value', () => {
@@ -42,7 +60,7 @@ it('image has capabilities label with expected value', () => {
 });
 ```
 
-The assertion looks host-side — it's a string equality. But `TEST_TAG` is BUILT by `build_image()` in the file's `beforeAll` at [test/integration/sandbox-podman.test.ts:18-22](../test/integration/sandbox-podman.test.ts#L18):
+The assertion looks host-side — it's a string equality. But `TEST_TAG` is BUILT by `build_image()` in the file's `beforeAll` at [test/integration/podman/sandbox-podman.test.ts:18-22](../test/integration/podman/sandbox-podman.test.ts#L18):
 
 ```ts
 beforeAll(async () => {
@@ -73,7 +91,7 @@ Some tests look like "host-side, sandbox is fixture" but actually encode bugs in
 | Shared `beforeAll` sandbox, read-only siblings | All tests in the describe block only READ from the sandbox (`exec_container(name, ['cat', ...])`, `inspect_sandbox(id)`) | Multiple `inspect_sandbox` probes on a default-config sandbox |
 | Shared `beforeAll` sandbox + `afterEach` revert | Tests mutate DISJOINT paths and each mutation can be reverted | [test/integration/changes.test.ts](../test/integration/changes.test.ts) tests 1–4 each touch `a.txt`/`b.txt`/`c.txt` — `afterEach` runs `git checkout -- a.txt b.txt && rm -f c.txt` |
 | Per-test sandbox, documented | Test asserts a lifecycle transition (`create_sandbox`, `destroy_sandbox`, `resume_sandbox` IS the subject); test mutates baseline in a way no `afterEach` can revert; test commits to HEAD or otherwise pollutes shared state | Single-purpose lifecycle tests; `changes.test.ts` test 6 (commits `.gitignore` into HEAD) |
-| Image build, file-level `beforeAll` | The file requires a custom-built test image | [test/integration/sandbox-podman.test.ts:18-22](../test/integration/sandbox-podman.test.ts#L18) builds `patchlab/sandbox-podman-test:latest` once; `afterAll` calls `remove_test_images()` |
+| Image build, file-level `beforeAll` | The file requires a custom-built test image | [test/integration/podman/sandbox-podman.test.ts:18-22](../test/integration/podman/sandbox-podman.test.ts#L18) builds `patchlab/sandbox-podman-test:latest` once; `afterAll` calls `remove_test_images()` |
 
 When you use a shared `beforeAll` sandbox, add a comment above it documenting (a) which files each downstream test mutates, (b) what the `afterEach` reverts, and (c) why any sibling test that sits in its own describe block needs its own sandbox. The comment lets the next person adding a test see the shared-state contract without re-deriving it.
 
@@ -132,5 +150,5 @@ The intended use of this document is: when a PR adds a test that doesn't fit, th
 ## Reference
 
 - [reports/integration-test-audit.md](../reports/integration-test-audit.md) — point-in-time audit of the integration suite (2026-06) along the podman-cost-vs-podman-coverage dimension. Section 1 has a per-file overview table; section 3 has per-file detail with carve-out specifics.
-- [test/integration/setup-podman.ts](../test/integration/setup-podman.ts) — the shared-runtime setup file that runs once per integration worker.
+- [test/integration/set-up-podman.ts](../test/integration/set-up-podman.ts) — the shared-runtime setup file that runs once per integration worker.
 - [vitest.config.ts](../vitest.config.ts) — the project definitions and parallelism settings.

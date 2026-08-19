@@ -19,7 +19,7 @@ import {
     build_session_path,
     next_session_number,
 } from '../../src/archive.js';
-import { exec_container } from '../../src/podman.js';
+import { exec_container } from '../../src/container_runtime.js';
 import { TEST_CONTAINER_WORKING_DIR, TEST_IMAGE_HOME } from '../test_helpers.js';
 import { get_provider } from '../../src/tools/index.js';
 import type { Tool_Provider } from '../../src/tools/types.js';
@@ -28,18 +28,9 @@ import type { Extractable_Artifact } from '../../src/extractable_artifact.js';
 
 describe('exit extraction integration', () => {
     let source_directory: string;
-    let original_home: string | undefined;
-    let original_userprofile: string | undefined;
-    let home_root: string;
     const cleanup_ids: string[] = [];
 
     beforeEach(() => {
-        home_root = fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-extraction-home-'));
-        original_home = process.env.HOME;
-        original_userprofile = process.env.USERPROFILE;
-        process.env.HOME = home_root;
-        process.env.USERPROFILE = home_root;
-
         source_directory = fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-extraction-src-'));
         execFileSync('git', ['init'], { cwd: source_directory, stdio: 'pipe' });
         fs.writeFileSync(path.join(source_directory, 'app.ts'), 'const x = 1;\n');
@@ -67,17 +58,6 @@ describe('exit extraction integration', () => {
         }
         cleanup_ids.length = 0;
         fs.rmSync(source_directory, { recursive: true, force: true });
-        if (original_home === undefined) {
-            delete process.env.HOME;
-        } else {
-            process.env.HOME = original_home;
-        }
-        if (original_userprofile === undefined) {
-            delete process.env.USERPROFILE;
-        } else {
-            process.env.USERPROFILE = original_userprofile;
-        }
-        fs.rmSync(home_root, { recursive: true, force: true });
     });
 
     it('extract_history captures git log, tolerates missing bash history (6.1)', async () => {

@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 
-vi.mock('../../../src/podman.js', () => ({
+vi.mock('../../../src/container_runtime.js', () => ({
     copy_to_container: vi.fn(),
     exec_container: vi.fn(),
 }));
@@ -13,7 +13,7 @@ import {
     inject_resume_context,
 } from '../../../src/sandbox/context_injection.js';
 import { build_session_path } from '../../../src/archive.js';
-import { copy_to_container, exec_container } from '../../../src/podman.js';
+import { copy_to_container, exec_container } from '../../../src/container_runtime.js';
 import { install_isolated_home_hooks } from '../../helpers/home_directory.js';
 import {
     install_recording_logger_hooks,

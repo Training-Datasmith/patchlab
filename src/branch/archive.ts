@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
+import { get_runtime_binary, runtime_host_tmpdir } from '../container_runtime.js';
 import { patchlab_branch_name } from './naming.js';
 import { branch_exists, patchlab_branch_exists } from './predicates.js';
 import type { Source_Specification } from '../manifest.js';
@@ -91,7 +92,7 @@ function probe_branch_archive(
     }
 
     const host_path = path.join(
-        os.tmpdir(),
+        runtime_host_tmpdir(),
         `patchlab-archive-${patchlab_id}-${process.pid}-${crypto.randomUUID().slice(0, 8)}.tar`
     );
 
@@ -265,7 +266,7 @@ export async function export_per_source_branch_tip_to_container(
     }
 
     const host_path = path.join(
-        os.tmpdir(),
+        runtime_host_tmpdir(),
         `patchlab-archive-${patchlab_id}-${process.pid}-${crypto.randomUUID().slice(0, 8)}.tar`,
     );
 
@@ -339,7 +340,7 @@ function stream_archive_to_container(
 ): Promise<void> {
     return new Promise<void>((resolve, reject) => {
         const child = spawn(
-            'podman',
+            get_runtime_binary(),
             ['exec', '-i', container_name, 'tar', '-xf', '-', '-C', destination_directory],
             { stdio: ['pipe', 'pipe', 'pipe'] }
         );

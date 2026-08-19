@@ -114,8 +114,18 @@ export interface Session_Metadata {
 }
 
 /** Root directory containing all patchlab archives. Persistent across reboots. */
+export function patchlab_home_directory(): string {
+    const override = process.env.PATCHLAB_HOME;
+    if (override !== undefined && override !== '') {
+        return override;
+    }
+
+    return os.homedir();
+}
+
+/** Root directory containing all patchlab archives. Persistent across reboots. */
 export function build_archives_root(): string {
-    return path.join(os.homedir(), PATCHLAB_DIRECTORY);
+    return path.join(patchlab_home_directory(), PATCHLAB_DIRECTORY);
 }
 
 /**
@@ -201,12 +211,25 @@ export function get_repository_root(source_path: string): string {
  * Compute the relative path from `repository_root` to `source_path` with no
  * trailing slash. Returns `""` if `source_path` is the repository root.
  */
+/**
+ * Resolve `input` to an absolute path, following symlinks when the target exists.
+ * Non-existent paths (e.g. unit-test fixtures) fall back to `path.resolve`.
+ */
+function canonical_existing_path(input: string): string {
+    const resolved = path.resolve(input);
+    try {
+        return fs.realpathSync(resolved);
+    } catch (_path_missing) {
+        return resolved;
+    }
+}
+
 export function get_source_prefix(
     repository_root: string,
     source_path: string
 ): string {
-    const repository = path.resolve(repository_root);
-    const source = path.resolve(source_path);
+    const repository = canonical_existing_path(repository_root);
+    const source = canonical_existing_path(source_path);
     const relative = path.relative(repository, source);
     if (relative === '' || relative === '.') {
         return '';

@@ -5,29 +5,21 @@
  * image label advertises, the image is "stale" and the user is prompted to
  * rebuild via `patchlab build-image`.
  */
-import { execFileSync } from 'node:child_process';
 import { CAPABILITIES_LABEL } from './images.js';
+import { read_image_label } from './container_runtime.js';
 
 /**
  * Read the capabilities label from a container image.
  * Returns null if the image has no capabilities label.
  */
 export function get_image_capabilities(image: string): string[] | null {
-    try {
-        const result = execFileSync(
-            'podman',
-            ['image', 'inspect', '--format', `{{index .Labels "${CAPABILITIES_LABEL}"}}`, image],
-            { stdio: 'pipe' },
-        ).toString('utf-8').trim();
+    const result = read_image_label(image, CAPABILITIES_LABEL);
 
-        if (!result || result === '<no value>') {
-            return null;
-        }
-
-        return result.split(',').map((s) => s.trim()).filter(Boolean);
-    } catch (_image_inspect_failed) {
+    if (!result || result === '<no value>') {
         return null;
     }
+
+    return result.split(',').map((s) => s.trim()).filter(Boolean);
 }
 
 export interface Stale_Check_Result {

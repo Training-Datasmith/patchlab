@@ -61,6 +61,24 @@ describe('list-tools (task 6.11)', () => {
         expect(logs).toContainEqual(expect.stringMatching(/^aider\s+\(Aider\)\s+\[user-global: \/manifests\/aider\.yaml\]/));
     });
 
+    it('appends [-p] when the provider supports prompt launch', () => {
+        const with_prompt: Tool_Provider = {
+            ...make_stub_provider('prompt-tool', 'Prompt Tool'),
+            get_prompt_launch_command(prompt) {
+                return ['prompt-tool', prompt];
+            },
+        };
+        register_provider(with_prompt);
+
+        run_list_tools({
+            output_log: (line) => logs.push(line),
+            output_warn: (line) => warnings.push(line),
+            user_global_errors: [],
+        });
+
+        expect(logs).toContainEqual(expect.stringMatching(/^prompt-tool\s+\(Prompt Tool\)\s+\[built-in\]\s+\[-p\]$/));
+    });
+
     it('reports broken manifests inline as format_warning lines and exits cleanly (task 6.11)', () => {
         register_provider(make_stub_provider('gemini-cli-oauth', 'Gemini CLI (OAuth)'));
 

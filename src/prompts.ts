@@ -31,7 +31,7 @@
 import { load_overrides, update_overrides } from './overrides.js';
 import type { Detected_Requirements } from './detect/index.js';
 import { logger } from './logger.js';
-import type { Running_Container } from './podman.js';
+import type { Running_Container } from './container_runtime.js';
 
 export type { Running_Container };
 
@@ -48,7 +48,11 @@ export type { Running_Container };
  */
 export interface Prompter {
     confirm(message: string, options?: { default_yes?: boolean }): Promise<boolean>;
-    choose(message: string, options: string[]): Promise<number | null>;
+    choose(
+        message: string,
+        options: string[],
+        choose_options?: { cancel_label?: string },
+    ): Promise<number | null>;
 }
 
 export interface Socket_Mount_Resolution {
@@ -73,7 +77,9 @@ export async function resolve_socket_mount(
     }
 
     const has_socket = requirements.volume_mounts.some(
-        (m) => m.host_path.includes('podman.sock') || m.host_path.includes('docker.sock'),
+        (m) => m.host_path.includes('podman.sock')
+            || m.host_path.includes('docker.sock')
+            || m.host_path.includes('containerd.sock'),
     );
     if (!has_socket) {
         return { approved: true }; // non-socket mounts are fine

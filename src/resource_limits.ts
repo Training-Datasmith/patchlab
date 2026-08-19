@@ -26,6 +26,7 @@
  */
 import * as os from 'node:os';
 import { logger } from './logger.js';
+import { query_nerdctl_runtime_capacity } from './nerdctl.js';
 // Types only — `configuration.ts` imports the `RESOURCE_LIMIT_FIELD_MAP`
 // runtime value from this module; making this a type-only import keeps the
 // graph one-way at runtime while letting the resolver name the configuration
@@ -112,12 +113,13 @@ const ONE_GIBIBYTE = 1024 * 1024 * 1024;
 const TWO_FIFTY_SIX_MEBIBYTES = 256 * 1024 * 1024;
 
 export function compute_runtime_defaults(): Runtime_Default_Limits {
-    const total_bytes = os.totalmem();
+    const runtime_capacity = query_nerdctl_runtime_capacity();
+    const total_bytes = runtime_capacity?.memory_bytes ?? os.totalmem();
+    const cpu_count = runtime_capacity?.cpu_count ?? os.cpus().length;
     const seventy_five_percent = Math.floor(total_bytes * 0.75);
     const rounded_to_256mib = Math.floor(seventy_five_percent / TWO_FIFTY_SIX_MEBIBYTES) * TWO_FIFTY_SIX_MEBIBYTES;
     const memory_bytes = Math.max(ONE_GIBIBYTE, rounded_to_256mib);
 
-    const cpu_count = os.cpus().length;
     const cpu_count_minus_one = Math.max(1, cpu_count - 1);
 
     return {

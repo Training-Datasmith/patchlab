@@ -13,12 +13,12 @@ import {
     install_package,
     DEFAULT_IMAGE,
     query_running_containers,
-} from '../../src/podman.js';
+} from '../../src/container_runtime.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import * as crypto from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { exec_runtime_cli } from '../helpers/exec_runtime_cli.js';
 
 describe('podman wrapper', () => {
     const containers: string[] = [];
@@ -135,19 +135,18 @@ describe('podman wrapper', () => {
         // default image under a deliberately-different name so we can prove
         // the argument actually reaches `podman create`.
         const probe_tag = 'patchlab/image-arg-test:probe';
-        execFileSync('podman', ['tag', DEFAULT_IMAGE, probe_tag], { stdio: 'pipe' });
+        exec_runtime_cli(['tag', DEFAULT_IMAGE, probe_tag], { stdio: 'pipe' });
         try {
             const name = test_name();
             create_container(name, probe_tag);
-            const config_image = execFileSync(
-                'podman',
+            const config_image = exec_runtime_cli(
                 ['inspect', name, '--format', '{{.Config.Image}}'],
                 { stdio: 'pipe' },
             ).toString('utf-8').trim();
             expect(config_image).toContain('image-arg-test');
         } finally {
             try {
-                execFileSync('podman', ['rmi', probe_tag], { stdio: 'pipe' });
+                exec_runtime_cli(['rmi', probe_tag], { stdio: 'pipe' });
             } catch {
                 // ignore
             }

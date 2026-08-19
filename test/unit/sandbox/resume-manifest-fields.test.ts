@@ -48,17 +48,24 @@ vi.mock('../../../src/sandbox/workspace_staging.js', () => ({
     prepare_workspace: vi.fn(),
 }));
 
-vi.mock('../../../src/podman.js', () => ({
-    DEFAULT_IMAGE: 'node:22-slim',
-    container_exists: vi.fn(() => false),
-    container_name_for: vi.fn((id: string) => `c-${id}`),
-    container_running: vi.fn(() => false),
-    create_container: vi.fn(),
-    query_running_containers: vi.fn(() => []),
-    start_container: vi.fn(),
-    stop_and_remove_container_best_effort: vi.fn(),
-    was_authentication_attempted_at_build: vi.fn(() => false),
-}));
+vi.mock('../../../src/container_runtime.js', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../../src/container_runtime.js')>();
+    return {
+        ...actual,
+        DEFAULT_IMAGE: 'node:22-slim',
+        container_exists: vi.fn(() => false),
+        container_name_for: vi.fn((id: string) => `c-${id}`),
+        container_running: vi.fn(() => false),
+        create_container: vi.fn(),
+        finalize_resumed_container: vi.fn(),
+        query_running_containers: vi.fn(() => []),
+        resume_staging_container_name: vi.fn((id: string) => `c-${id}-resume-staging`),
+        runtime_host_tmpdir: vi.fn(() => os.tmpdir()),
+        start_container: vi.fn(),
+        stop_and_remove_container_best_effort: vi.fn(),
+        was_authentication_attempted_at_build: vi.fn(() => false),
+    };
+});
 
 vi.mock('../../../src/sandbox/image_tier.js', () => ({
     resolve_effective_image: vi.fn(() => ({ effective_image: 'node:22-slim', tool_state: 'absent' })),
@@ -82,6 +89,8 @@ vi.mock('../../../src/sandbox/persisted_resource_limits.js', () => ({
 
 vi.mock('../../../src/sandbox/session_archive.js', () => ({
     check_required_for_resume: vi.fn(),
+    claim_session_directory: vi.fn(() => 2),
+    write_claimed_session_metadata: vi.fn(),
     write_initial_session_metadata: vi.fn(() => 1),
 }));
 
@@ -94,15 +103,30 @@ vi.mock('../../../src/cgroups.js', () => ({
     warn_once_if_unsupported: vi.fn(),
 }));
 
-vi.mock('../../../src/tools/index.js', () => ({
-    compute_container_workspace_path: vi.fn(() => '/home/patchlab/workspace'),
-    get_provider: vi.fn(),
-    register_per_source_manifests: vi.fn(() => ({
-        manifest_buffers: new Map<string, Buffer>(),
-        registered_manifests: [],
-        registered_manifest_repositories: [],
-        errors: [],
+vi.mock('../../../src/tools/index.js', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../../src/tools/index.js')>();
+    return {
+        ...actual,
+        compute_container_workspace_path: vi.fn(() => '/home/patchlab/workspace'),
+        get_provider: vi.fn(),
+        register_per_source_manifests: vi.fn(() => ({
+            manifest_buffers: new Map<string, Buffer>(),
+            registered_manifests: [],
+            registered_manifest_repositories: [],
+            errors: [],
+        })),
+    };
+});
+
+vi.mock('../../../src/sandbox/host_access.js', () => ({
+    prepare_provider_host_access: vi.fn(async () => ({
+        extra_hosts: [],
+        extra_environment_variables: {},
+        file_copies: [],
+        stop: async () => {},
     })),
+    inject_provider_host_files: vi.fn(),
+    stop_prepared_host_access: vi.fn(async () => {}),
 }));
 
 vi.mock('../../../src/tools/configured_provider/trust_verification.js', () => ({
@@ -121,7 +145,7 @@ import { create_sandbox, resume_sandbox } from '../../../src/sandbox/index.js';
 import { build_archive_path } from '../../../src/archive.js';
 import { create_manifest, write_manifest } from '../../../src/manifest.js';
 import { execute_phase_2_mutations } from '../../../src/sandbox/branch_handshake.js';
-import { create_container } from '../../../src/podman.js';
+import { create_container } from '../../../src/container_runtime.js';
 import { install_npm_packages } from '../../../src/sandbox/workspace_staging.js';
 import { get_provider } from '../../../src/tools/index.js';
 import { install_isolated_home_hooks } from '../../helpers/home_directory.js';

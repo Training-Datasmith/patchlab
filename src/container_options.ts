@@ -4,8 +4,10 @@ import type { Detected_Requirements } from './detect/index.js';
 export function build_volume_mounts(merged: Detected_Requirements, socket_approved: boolean): string[] {
     const mounts: string[] = [];
     for (const m of merged.volume_mounts) {
-        const is_socket = m.host_path.includes('podman.sock') || m.host_path.includes('docker.sock');
-        if (is_socket && !socket_approved) {
+        const socketed = m.host_path.includes('podman.sock')
+            || m.host_path.includes('docker.sock')
+            || m.host_path.includes('containerd.sock');
+        if (socketed && !socket_approved) {
             continue;
         }
 
@@ -22,9 +24,11 @@ export function build_environment_variables(merged: Detected_Requirements, volum
     }
 
     if (socket_approved) {
-        const podman_socket_mount = volume_mounts.find((m) => m.includes('podman.sock'));
-        if (podman_socket_mount) {
-            environment['CONTAINER_HOST'] = `unix://${split_mount(podman_socket_mount)[1]}`;
+        const runtime_socket_mount = volume_mounts.find(
+            (m) => m.includes('podman.sock') || m.includes('containerd.sock'),
+        );
+        if (runtime_socket_mount) {
+            environment['CONTAINER_HOST'] = `unix://${split_mount(runtime_socket_mount)[1]}`;
         }
 
         const docker_socket_mount = volume_mounts.find((m) => m.includes('docker.sock'));

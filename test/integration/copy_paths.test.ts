@@ -18,7 +18,7 @@ import {
     next_session_number,
     read_session_metadata,
 } from '../../src/archive.js';
-import { exec_container } from '../../src/podman.js';
+import { exec_container } from '../../src/container_runtime.js';
 import { get_provider } from '../../src/tools/index.js';
 import { DEFAULT_TEST_TOOL } from '../helpers/stub_tool_provider.js';
 import { extract_workspace_copies, type Copy_Specification } from '../../src/sandbox/workspace_copies.js';
@@ -64,18 +64,9 @@ async function commit_current_session(manifest: { id: string; container_name: st
 describe('--copy workspace copies', () => {
     let source_directory: string;
     let copy_source_directory: string;
-    let original_home: string | undefined;
-    let original_userprofile: string | undefined;
-    let home_root: string;
     const cleanup_ids: string[] = [];
 
     beforeEach(() => {
-        home_root = fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-copy-home-'));
-        original_home = process.env.HOME;
-        original_userprofile = process.env.USERPROFILE;
-        process.env.HOME = home_root;
-        process.env.USERPROFILE = home_root;
-
         source_directory = fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-copy-src-'));
         copy_source_directory = fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-copy-files-'));
 
@@ -95,17 +86,6 @@ describe('--copy workspace copies', () => {
         cleanup_ids.length = 0;
         fs.rmSync(source_directory, { recursive: true, force: true });
         fs.rmSync(copy_source_directory, { recursive: true, force: true });
-        if (original_home === undefined) {
-            delete process.env.HOME;
-        } else {
-            process.env.HOME = original_home;
-        }
-        if (original_userprofile === undefined) {
-            delete process.env.USERPROFILE;
-        } else {
-            process.env.USERPROFILE = original_userprofile;
-        }
-        fs.rmSync(home_root, { recursive: true, force: true });
     });
 
     it('5.1 — non-gitignored --copy file appears in container workspace and baseline commit', async () => {

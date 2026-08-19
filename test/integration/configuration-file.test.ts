@@ -31,9 +31,8 @@ import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { destroy_sandbox } from '../../src/sandbox/index.js';
 import { build_image, PATCHLAB_TEST_LABEL, remove_test_images } from '../../src/images.js';
-import { image_exists } from '../../src/podman.js';
+import { image_exists } from '../../src/container_runtime.js';
 import { DEFAULT_TEST_TOOL } from '../helpers/stub_tool_provider.js';
 import { next_session_number, read_session_metadata } from '../../src/archive.js';
 import {
@@ -41,48 +40,23 @@ import {
     user_global_configuration_path,
     per_source_configuration_path,
 } from '../../src/configuration.js';
+import { detect_runtime_enforces_limits, inspect_host_config } from '../helpers/exec_runtime_cli.js';
+import {
+    create_integration_cleanup_registry,
+    register_destroy_sandbox,
+} from '../helpers/integration_cleanup.js';
 
 const TEST_TAG = 'patchlab/configuration-file-test:latest';
 const TEST_LABEL = `${PATCHLAB_TEST_LABEL}=true`;
 
-function detect_podman_enforces_limits(): boolean {
-    const probe_name = `patchlab-configuration-probe-${Date.now()}`;
-    try {
-        execFileSync('podman', [
-            'create', '--name', probe_name, '--memory', '1g', 'node:22-slim', 'sleep', 'infinity',
-        ], { stdio: 'pipe' });
-    } catch {
-        return false;
-    }
-    try {
-        const output = execFileSync(
-            'podman', ['inspect', '--format', '{{.HostConfig.Memory}}', probe_name],
-            { encoding: 'utf-8' },
-        );
-        return Number(output.trim()) === 1024 * 1024 * 1024;
-    } catch {
-        return false;
-    } finally {
-        try {
-            execFileSync('podman', ['rm', '-f', probe_name], { stdio: 'pipe' });
-        } catch {
-            // ignore
-        }
-    }
-}
-
 interface Host_Config {
     Memory: number;
-    NanoCpus: number;
+    NanoCpus: number | undefined;
     PidsLimit: number;
 }
 
-function inspect_host_config(container_name: string): Host_Config {
-    const output = execFileSync(
-        'podman', ['inspect', '--format', '{{json .HostConfig}}', container_name],
-        { encoding: 'utf-8' },
-    );
-    return JSON.parse(output) as Host_Config;
+function read_host_config(container_name: string): Host_Config {
+    return inspect_host_config(container_name);
 }
 
 function make_source_directory(): string {
@@ -116,31 +90,27 @@ function write_per_source_configuration(source_directory: string, yaml: string):
 let patchlab_home: string;
 let original_patchlab_home: string | undefined;
 let limits_enforced: boolean;
-const cleanup_handlers: (() => void)[] = [];
+const cleanup = create_integration_cleanup_registry();
 
 beforeAll(async () => {
     patchlab_home = fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-configuration-file-home-'));
     original_patchlab_home = process.env.PATCHLAB_HOME;
     process.env.PATCHLAB_HOME = patchlab_home;
-    limits_enforced = detect_podman_enforces_limits();
+    limits_enforced = detect_runtime_enforces_limits();
     if (!image_exists(TEST_TAG)) {
         await build_image({ tag: TEST_TAG, tools: [DEFAULT_TEST_TOOL], capabilities: [], labels: [TEST_LABEL] });
     }
 }, 600_000);
 
-afterAll(() => {
-    for (const fn of cleanup_handlers.toReversed()) {
-        try {
-            fn();
-        } catch {
-            // best-effort
-        }
-    }
-    fs.rmSync(patchlab_home, { recursive: true, force: true });
+afterAll(async () => {
+    await cleanup.run_all();
     if (original_patchlab_home === undefined) {
         delete process.env.PATCHLAB_HOME;
     } else {
         process.env.PATCHLAB_HOME = original_patchlab_home;
+    }
+    if (patchlab_home !== '') {
+        fs.rmSync(patchlab_home, { recursive: true, force: true });
     }
     remove_test_images();
 });
@@ -152,7 +122,7 @@ describe('user-global configuration applied to a real sandbox', () => {
 
     it('user-global memory + cpus configuration produces matching podman flags', async () => {
         source_directory = make_source_directory();
-        cleanup_handlers.push(() => fs.rmSync(source_directory, { recursive: true, force: true }));
+        cleanup.register(() => fs.rmSync(source_directory, { recursive: true, force: true }));
 
         write_user_global_configuration(
             'resource_limits:\n'
@@ -171,21 +141,13 @@ describe('user-global configuration applied to a real sandbox', () => {
         });
         sandbox_id = manifest.id;
         container_name = manifest.container_name;
-        cleanup_handlers.push(() => {
-            (async () => {
-                try {
-                    await destroy_sandbox(sandbox_id, { force: true });
-                } catch {
-                    // ignore
-                }
-            })();
-        });
+        register_destroy_sandbox(cleanup, sandbox_id);
 
         if (!limits_enforced) {
             return;
         }
 
-        const host = inspect_host_config(container_name);
+        const host = read_host_config(container_name);
         expect(host.Memory).toBe(1024 * 1024 * 1024);
         expect(host.NanoCpus).toBe(1_000_000_000);
         // pids was not set anywhere; the resolver falls through to the
@@ -210,7 +172,7 @@ describe('user-global configuration applied to a real sandbox', () => {
         // This test sets a non-default `pids` value in the YAML and asserts
         // HostConfig.PidsLimit matches.
         const local_source_directory = make_source_directory();
-        cleanup_handlers.push(() => fs.rmSync(local_source_directory, { recursive: true, force: true }));
+        cleanup.register(() => fs.rmSync(local_source_directory, { recursive: true, force: true }));
 
         write_user_global_configuration(
             'resource_limits:\n'
@@ -226,21 +188,13 @@ describe('user-global configuration applied to a real sandbox', () => {
             loaded_configuration,
         });
         const local_sandbox_id = manifest.id;
-        cleanup_handlers.push(() => {
-            (async () => {
-                try {
-                    await destroy_sandbox(local_sandbox_id, { force: true });
-                } catch {
-                    // ignore
-                }
-            })();
-        });
+        register_destroy_sandbox(cleanup, local_sandbox_id);
 
         if (!limits_enforced) {
             return;
         }
 
-        const host = inspect_host_config(manifest.container_name);
+        const host = read_host_config(manifest.container_name);
         expect(host.PidsLimit).toBe(512);
 
         // Belt-and-suspenders: the manifest also records the pids value, so
@@ -258,7 +212,7 @@ describe('per-source configuration is clamped against user-global', () => {
 
     it('per-source memory: 8g vs user-global memory: 1g → effective 1g', async () => {
         source_directory = make_source_directory();
-        cleanup_handlers.push(() => fs.rmSync(source_directory, { recursive: true, force: true }));
+        cleanup.register(() => fs.rmSync(source_directory, { recursive: true, force: true }));
 
         // Re-write the user-global file (the previous suite shared this
         // tempdir but the values are the same — explicitly write here for
@@ -282,21 +236,13 @@ describe('per-source configuration is clamped against user-global', () => {
         });
         sandbox_id = manifest.id;
         container_name = manifest.container_name;
-        cleanup_handlers.push(() => {
-            (async () => {
-                try {
-                    await destroy_sandbox(sandbox_id, { force: true });
-                } catch {
-                    // ignore
-                }
-            })();
-        });
+        register_destroy_sandbox(cleanup, sandbox_id);
 
         if (!limits_enforced) {
             return;
         }
 
-        const host = inspect_host_config(container_name);
+        const host = read_host_config(container_name);
         // Per-source 8g was CLAMPED to the user-global 1g upper bound.
         expect(host.Memory).toBe(1024 * 1024 * 1024);
     }, 600_000);
@@ -315,7 +261,7 @@ describe('per-source configuration is clamped against user-global', () => {
         // when per-source is BELOW user-global, the resolver SHALL keep the
         // per-source value, not raise it.
         const local_source_directory = make_source_directory();
-        cleanup_handlers.push(() => fs.rmSync(local_source_directory, { recursive: true, force: true }));
+        cleanup.register(() => fs.rmSync(local_source_directory, { recursive: true, force: true }));
 
         write_user_global_configuration('resource_limits:\n  memory: "1g"\n');
         write_per_source_configuration(
@@ -331,21 +277,13 @@ describe('per-source configuration is clamped against user-global', () => {
             loaded_configuration,
         });
         const local_sandbox_id = manifest.id;
-        cleanup_handlers.push(() => {
-            (async () => {
-                try {
-                    await destroy_sandbox(local_sandbox_id, { force: true });
-                } catch {
-                    // ignore
-                }
-            })();
-        });
+        register_destroy_sandbox(cleanup, local_sandbox_id);
 
         if (!limits_enforced) {
             return;
         }
 
-        const host = inspect_host_config(manifest.container_name);
+        const host = read_host_config(manifest.container_name);
         // 512 MiB, not raised to 1 GiB.
         expect(host.Memory).toBe(512 * 1024 * 1024);
 

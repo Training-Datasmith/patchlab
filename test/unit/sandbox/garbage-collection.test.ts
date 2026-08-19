@@ -33,8 +33,8 @@ vi.mock('node:os', async (importOriginal) => {
 });
 
 // Mock podman — garbage_collection.ts imports it directly
-vi.mock('../../../src/podman.js', async (importOriginal) => {
-    const original = await importOriginal<typeof import('../../../src/podman.js')>();
+vi.mock('../../../src/container_runtime.js', async (importOriginal) => {
+    const original = await importOriginal<typeof import('../../../src/container_runtime.js')>();
     return {
         ...original,
         create_container: vi.fn(),

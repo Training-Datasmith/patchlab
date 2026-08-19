@@ -28,6 +28,14 @@ import {
 } from '../../src/configuration.js';
 import { UNLIMITED } from '../../src/resource_limits.js';
 
+function expect_empty_loaded_configuration(result: ReturnType<typeof load_configuration>): void {
+    expect(result.user_global).toBeNull();
+    expect(result.per_source).toBeNull();
+    expect(result.default_tool).toBeNull();
+    expect(result.tool_configuration).toEqual({});
+    expect(result.per_repository_default_tools).toEqual({});
+}
+
 let patchlab_home: string;
 let source_directory: string;
 let original_patchlab_home: string | undefined;
@@ -77,8 +85,7 @@ afterEach(() => {
 
 describe('absent files', () => {
     it('both files missing produces null/null with no error', () => {
-        const result = load_configuration([source_directory]);
-        expect(result).toEqual({ user_global: null, per_source: null });
+        expect_empty_loaded_configuration(load_configuration([source_directory]));
     });
 
     it('user-global present, per-source missing', () => {
@@ -568,5 +575,39 @@ describe('multi-repository per-source composition', () => {
         write_per_source_at(repository_b, 'resource_limits:\n  blkio_weight: 200\n');
         const result = load_configuration([repository_a, repository_b]);
         expect(result.per_source?.blkio_weight).toBe(200);
+    });
+});
+
+describe('default_tool and tool_configuration settings', () => {
+    it('loads user-global default_tool and tool_configuration settings', () => {
+        write_user_global([
+            'default_tool: shell',
+            'tool_configuration:',
+            '  opencode:',
+            '    copy_host_configuration: false',
+            '    proxy_local_models: false',
+            '    environment:',
+            '      CUSTOM_FLAG: "1"',
+        ].join('\n') + '\n');
+        const result = load_configuration([source_directory]);
+        expect(result.default_tool).toBe('shell');
+        expect(result.tool_configuration.opencode?.copy_host_configuration).toBe(false);
+        expect(result.tool_configuration.opencode?.proxy_local_models).toBe(false);
+        expect(result.tool_configuration.opencode?.environment).toEqual({ CUSTOM_FLAG: '1' });
+    });
+
+    it('loads per-source default_tool into per_repository_default_tools', () => {
+        write_per_source([
+            'default_tool: team-tool',
+            'tool_configuration:',
+            '  opencode:',
+            '    copy_host_auth: false',
+        ].join('\n') + '\n');
+        const result = load_configuration([source_directory]);
+        expect(result.default_tool).toBeNull();
+        expect(result.per_repository_default_tools).toEqual({
+            [source_directory]: 'team-tool',
+        });
+        expect(result.tool_configuration).toEqual({});
     });
 });

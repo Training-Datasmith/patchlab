@@ -12,8 +12,8 @@
  * hash and the parsed manifest — both reads pin to the same bytes.
  */
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
+import { patchlab_home_directory } from '../../archive.js';
 import { parse_manifest, type Parse_Manifest_Options } from './parse.js';
 import type {
     Configured_Tool_Provider_Manifest,
@@ -28,7 +28,7 @@ const MANIFEST_EXTENSIONS = new Set(['.yaml', '.yml']);
  * the caller pairs this with `parse_manifest` for each path.
  */
 export function discover_user_global_manifest_paths(): string[] {
-    const directory = path.join(os.homedir(), '.patchlab', 'tools');
+    const directory = path.join(patchlab_home_directory(), '.patchlab', 'tools');
     return discover_manifest_paths(directory);
 }
 

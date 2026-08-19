@@ -153,6 +153,56 @@ describe('parse_manifest — malformed (7.2)', () => {
         expect(result.reason).toMatch(/unknown/);
     });
 
+    it('accepts prompt_launch_command with a {{prompt}} placeholder', () => {
+        const yaml_text = minimal_yaml([
+            'prompt_launch_command:',
+            '  - my-tool',
+            '  - --message',
+            "  - '{{prompt}}'",
+        ].join('\n'));
+        const result = parse_manifest(yaml_text, MANIFEST_PATH);
+        expect(is_error(result)).toBe(false);
+        if (is_error(result)) {
+            return;
+        }
+        expect(result.prompt_launch_command).toEqual(['my-tool', '--message', '{{prompt}}']);
+    });
+
+    it('accepts prompt_resume_launch_command when prompt_launch_command is set', () => {
+        const yaml_text = minimal_yaml([
+            'prompt_launch_command:',
+            '  - my-tool',
+            "  - '{{prompt}}'",
+            'prompt_resume_launch_command:',
+            '  - my-tool',
+            '  - --continue',
+            "  - '{{prompt}}'",
+        ].join('\n'));
+        const result = parse_manifest(yaml_text, MANIFEST_PATH);
+        expect(is_error(result)).toBe(false);
+        if (is_error(result)) {
+            return;
+        }
+        expect(result.prompt_launch_command).toEqual(['my-tool', '{{prompt}}']);
+        expect(result.prompt_resume_launch_command).toEqual([
+            'my-tool', '--continue', '{{prompt}}',
+        ]);
+    });
+
+    it('rejects prompt_resume_launch_command without prompt_launch_command', () => {
+        const yaml_text = minimal_yaml([
+            'prompt_resume_launch_command:',
+            '  - my-tool',
+            "  - '{{prompt}}'",
+        ].join('\n'));
+        const result = parse_manifest(yaml_text, MANIFEST_PATH);
+        expect(is_error(result)).toBe(true);
+        if (!is_error(result)) {
+            return;
+        }
+        expect(result.field_path).toBe('prompt_resume_launch_command');
+    });
+
     it('rejects an invalid authentication method', () => {
         const yaml_text = minimal_yaml().replace('method: none', 'method: bogus');
         const result = parse_manifest(yaml_text, MANIFEST_PATH);

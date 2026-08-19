@@ -28,7 +28,10 @@ import {
     UNLIMITED,
     type Persisted_Resource_Limits,
 } from '../../../../src/resource_limits.js';
-import type { Loaded_Resource_Limits } from '../../../../src/configuration.js';
+import {
+    loaded_configuration_with_resource_limits,
+    type Loaded_Resource_Limits,
+} from '../../../../src/configuration.js';
 import { install_recording_logger_hooks, type RecordingLogger } from '../../../helpers/recording_logger.js';
 
 function empty_loaded(): Loaded_Resource_Limits {
@@ -60,7 +63,7 @@ describe('per-source raises clamped to user-global', () => {
             memory_limit: '8g',
         };
         const resolved = resolve_resource_limits(
-            { user_global, per_source },
+            loaded_configuration_with_resource_limits(user_global, per_source),
             null,
             {},
         );
@@ -87,7 +90,7 @@ describe('per-source tightens within bound — no clamp event', () => {
             memory_limit: '2g',
         };
         const resolved = resolve_resource_limits(
-            { user_global, per_source },
+            loaded_configuration_with_resource_limits(user_global, per_source),
             null,
             {},
         );
@@ -107,7 +110,7 @@ describe('per-source unlimited (0) discarded — does NOT widen', () => {
             memory_limit: UNLIMITED,
         };
         const resolved = resolve_resource_limits(
-            { user_global, per_source },
+            loaded_configuration_with_resource_limits(user_global, per_source),
             null,
             {},
         );
@@ -129,7 +132,7 @@ describe('per-source clamped against runtime default when no user-global', () =>
             memory_limit: '16g',
         };
         const resolved = resolve_resource_limits(
-            { user_global: null, per_source },
+            loaded_configuration_with_resource_limits(null, per_source),
             null,
             {},
         );
@@ -154,7 +157,7 @@ describe('per-source tightens an unlimited user-global to a concrete value', () 
             memory_limit: '2g',
         };
         const resolved = resolve_resource_limits(
-            { user_global, per_source },
+            loaded_configuration_with_resource_limits(user_global, per_source),
             null,
             {},
         );
@@ -179,7 +182,7 @@ describe('per-source unlimited against unlimited user-global stays unlimited', (
             memory_limit: UNLIMITED,
         };
         const resolved = resolve_resource_limits(
-            { user_global, per_source },
+            loaded_configuration_with_resource_limits(user_global, per_source),
             null,
             {},
         );
@@ -208,7 +211,7 @@ describe('per-source blkio_weight always ignored', () => {
             blkio_weight: 800,
         };
         const resolved = resolve_resource_limits(
-            { user_global: null, per_source },
+            loaded_configuration_with_resource_limits(null, per_source),
             null,
             {},
         );
@@ -231,7 +234,7 @@ describe('per-source blkio_weight always ignored', () => {
             blkio_weight: 800,
         };
         const resolved = resolve_resource_limits(
-            { user_global, per_source },
+            loaded_configuration_with_resource_limits(user_global, per_source),
             null,
             {},
         );
@@ -260,7 +263,7 @@ describe('clamp ignores manifest and CLI as upper-bound contributors', () => {
             memory_limit: '14g', cpu_limit: '3.0', pids_limit: 1024, blkio_weight: null,
         };
         const resolved = resolve_resource_limits(
-            { user_global, per_source },
+            loaded_configuration_with_resource_limits(user_global, per_source),
             manifest,
             { memory_limit: '14g' },
         );
@@ -290,7 +293,7 @@ describe('multiple clamps in one invocation produce one event per affected field
             blkio_weight: 800,     // ignored
         };
         resolve_resource_limits(
-            { user_global, per_source },
+            loaded_configuration_with_resource_limits(user_global, per_source),
             null,
             {},
         );

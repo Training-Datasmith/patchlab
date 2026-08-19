@@ -1,9 +1,11 @@
 #!/usr/bin/env node
-// Run the `posix` vitest project inside a Linux container via podman.
+// Run the `posix` vitest project inside a Linux container via the active
+// container runtime (podman on Linux/Windows, nerdctl.lima on macOS).
 //
 // We use this rather than running the suite directly because three tests
 // (fifo/socket type detection, case-sensitive `.YAML` extension, unprivileged
-// symlinks) exercise filesystem behaviour that Windows hosts cannot simulate.
+// symlinks) exercise filesystem behaviour that Windows and macOS hosts cannot
+// simulate (NTFS / default APFS are case-insensitive).
 //
 // The container gets the source tree as an overlay mount (`:O`), so the
 // fresh `npm ci` inside doesn't replace the host's Windows-built esbuild
@@ -12,6 +14,23 @@
 
 import { spawnSync } from 'node:child_process';
 import { sep } from 'node:path';
+
+function resolve_posix_runtime() {
+    if (process.env.PATCHLAB_CONTAINER_RUNTIME === 'podman') {
+        return 'podman';
+    }
+
+    for (const candidate of ['nerdctl.lima', 'nerdctl', 'podman']) {
+        const probe = spawnSync(candidate, ['--version'], { stdio: 'pipe' });
+        if (probe.status === 0) {
+            return candidate;
+        }
+    }
+
+    return 'podman';
+}
+
+const CONTAINER_RUNTIME = resolve_posix_runtime();
 
 const NODE_IMAGE = 'node:24-alpine';
 const NODE_MODULES_VOLUME = 'patchlab-posix-node-modules';
@@ -25,21 +44,21 @@ const inner_command = [
     // pre-baked image. Container is `--rm`'d after each run, so the install
     // is per-run, not persisted.
     'apk add --no-cache git &&',
-    // Skip install when the cached volume already has the lockfile-matching tree.
-    'if [ ! -f /work/node_modules/.posix-installed ]; then',
-    '  npm ci --prefer-offline --no-audit --no-fund &&',
-    '  touch /work/node_modules/.posix-installed;',
+    // Re-install when the cached volume is missing vitest (stale/partial cache).
+    'if [ ! -f /work/node_modules/vitest/vitest.mjs ]; then',
+    '  npm ci --prefer-offline --no-audit --no-fund;',
     'fi &&',
+    'chown -R node:node /work/node_modules &&',
     // Drop to the image's built-in non-root `node` user (uid 1000) for the
     // actual vitest run. CI's ubuntu-latest runner is also non-root, so the
     // posix project's chmod-gated tests (e.g., EACCES) behave the same in
     // both environments. Running as root would bypass file-mode permission
     // checks on Linux and break those assertions.
-    'su node -c "npx vitest run --project posix"',
+    'su node -c "node /work/node_modules/vitest/vitest.mjs run --project posix"',
 ].join(' ');
 
 const result = spawnSync(
-    'podman',
+    CONTAINER_RUNTIME,
     [
         'run', '--rm',
         '-v', `${SOURCE_MOUNT}:/work:O`,
@@ -52,7 +71,7 @@ const result = spawnSync(
 );
 
 if (result.error) {
-    console.error(`Failed to invoke podman: ${result.error.message}`);
+    console.error(`Failed to invoke ${CONTAINER_RUNTIME}: ${result.error.message}`);
     process.exit(1);
 }
 process.exit(result.status ?? 1);

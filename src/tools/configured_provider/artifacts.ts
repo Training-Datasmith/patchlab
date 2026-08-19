@@ -55,20 +55,72 @@ export function validate_validation_block(raw: unknown): { command: string[] } |
     return { command: command_raw as string[] };
 }
 
-export function validate_launch_command(raw: unknown): string[] {
+/** Placeholder substituted with the `-p/--prompt` value at launch time. */
+export const PROMPT_LAUNCH_PLACEHOLDER = '{{prompt}}';
+
+function validate_argv_token_list(
+    raw: unknown,
+    field_path: string,
+    options: { required: boolean; require_prompt_placeholder: boolean },
+): string[] | undefined {
+    if (raw === undefined) {
+        if (options.required) {
+            fail(field_path, 'required; must be a list of strings');
+        }
+        return undefined;
+    }
+
     if (!Array.isArray(raw)) {
-        fail('launch_command', 'required; must be a list of strings');
+        fail(field_path, 'must be a list of strings');
     }
     if (raw.length === 0) {
-        fail('launch_command', 'must be a non-empty array — execve requires a program name as argv[0]');
+        fail(field_path, 'must be a non-empty array — execve requires a program name as argv[0]');
     }
+
+    let contains_prompt_placeholder = false;
     for (const [index, token] of raw.entries()) {
         if (typeof token !== 'string') {
-            fail(`launch_command[${index}]`, 'must be a string');
+            fail(`${field_path}[${index}]`, 'must be a string');
+        }
+        if (token.includes(PROMPT_LAUNCH_PLACEHOLDER)) {
+            contains_prompt_placeholder = true;
         }
     }
 
+    if (options.require_prompt_placeholder && !contains_prompt_placeholder) {
+        fail(
+            field_path,
+            `must contain at least one "${PROMPT_LAUNCH_PLACEHOLDER}" placeholder`,
+        );
+    }
+
     return raw as string[];
+}
+
+export function validate_launch_command(raw: unknown): string[] {
+    const argv = validate_argv_token_list(raw, 'launch_command', {
+        required: true,
+        require_prompt_placeholder: false,
+    });
+    if (argv === undefined) {
+        fail('launch_command', 'required; must be a list of strings');
+    }
+    return argv;
+}
+
+export function validate_optional_prompt_launch_command(
+    raw: unknown,
+    field_path: string,
+): string[] | undefined {
+    return validate_argv_token_list(raw, field_path, {
+        required: false,
+        require_prompt_placeholder: true,
+    });
+}
+
+/** Expand `{{prompt}}` placeholders in a manifest prompt-launch argv list. */
+export function expand_prompt_launch_argv(argv: readonly string[], prompt: string): string[] {
+    return argv.map((token) => token.split(PROMPT_LAUNCH_PLACEHOLDER).join(prompt));
 }
 
 const KNOWN_ARTIFACT_FIELDS = new Set([

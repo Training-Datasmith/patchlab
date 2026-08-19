@@ -50,6 +50,16 @@ export interface Configured_Tool_Provider_Manifest {
     };
     authentication: Manifest_Authentication;
     launch_command: string[];
+    /**
+     * Optional argv for `patchlab create|resume -p`. At least one token must
+     * contain the `{{prompt}}` placeholder, substituted at launch time.
+     */
+    prompt_launch_command?: string[];
+    /**
+     * Optional argv override for `patchlab resume -p`. When absent, resume
+     * reuses `prompt_launch_command`.
+     */
+    prompt_resume_launch_command?: string[];
     validation?: { command: string[] };
     extractable_artifacts: Extractable_Artifact[];
     overrides_builtin: boolean;

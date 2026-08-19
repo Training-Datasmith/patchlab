@@ -54,6 +54,7 @@ export {
     type Delete_Branch_Outcome,
     type Delete_Branch_Options,
     delete_patchlab_branch,
+    delete_patchlab_branch_in_repositories,
     unapplied_session_commits,
 } from './delete.js';
 

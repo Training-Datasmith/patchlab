@@ -19,7 +19,7 @@ import {
     write_session_metadata,
 } from '../../src/archive.js';
 import { read_manifest } from '../../src/manifest.js';
-import { exec_container } from '../../src/podman.js';
+import { exec_container } from '../../src/container_runtime.js';
 import { strict as assert } from 'node:assert';
 import { DEFAULT_TEST_TOOL } from '../helpers/stub_tool_provider.js';
 import { assert_present } from '../helpers/assert_present.js';

@@ -14,7 +14,7 @@ import { build_archive_path } from '../../src/archive.js';
 import {
     exec_container,
     container_exists,
-} from '../../src/podman.js';
+} from '../../src/container_runtime.js';
 
 function commit_all(repo: string): void {
     execFileSync('git', ['add', '-A'], { cwd: repo });

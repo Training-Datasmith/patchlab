@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { cli_subprocess_env } from '../helpers/home_directory.js';
 
 /**
  * End-to-end `--verbose` flag acceptance tests. Spawns the built CLI
@@ -53,9 +54,7 @@ function run_cli(
 ): Spawn_Result {
     const result = spawnSync(process.execPath, [CLI_PATH, ...command_arguments], {
         env: {
-            ...process.env,
-            HOME: home_directory,
-            USERPROFILE: home_directory,
+            ...cli_subprocess_env(home_directory),
             PATCHLAB_ALLOW_UNTRUSTED_MANIFESTS: '0',
             ...extra_environment,
         },

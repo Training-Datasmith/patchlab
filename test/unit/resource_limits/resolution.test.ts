@@ -24,19 +24,9 @@ import {
     UNLIMITED,
     type Persisted_Resource_Limits,
 } from '../../../src/resource_limits.js';
-import type { Loaded_Configuration } from '../../../src/configuration.js';
+import { EMPTY_LOADED_CONFIGURATION } from '../../../src/sandbox/persisted_resource_limits.js';
 
-/**
- * Identity loaded-configuration used by the prior change's three-layer
- * precedence tests, which exercise defaults / manifest / CLI without any
- * user-global or per-source layer. Both slots are `null`, so the resolver
- * skips the configuration layers entirely and the test's assertions about
- * the existing three layers continue to hold.
- */
-const NO_LOADED_CONFIGURATION: Loaded_Configuration = {
-    user_global: null,
-    per_source: null,
-};
+const NO_LOADED_CONFIGURATION = EMPTY_LOADED_CONFIGURATION;
 
 describe('resolve_resource_limits — three-layer precedence', () => {
     beforeEach(() => {

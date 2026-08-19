@@ -96,6 +96,23 @@ describe('archive: git helpers', () => {
         const result = get_source_prefix('/repo', '/repo/src');
         expect(result).toBe('src');
     });
+
+    it('get_source_prefix treats /var and /private/var as the same root on macOS', () => {
+        if (process.platform !== 'darwin') {
+            return;
+        }
+
+        const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-prefix-test-'));
+        try {
+            const private_repository = fs.realpathSync(repository);
+            if (private_repository === repository) {
+                return;
+            }
+            expect(get_source_prefix(private_repository, repository)).toBe('');
+        } finally {
+            fs.rmSync(repository, { recursive: true, force: true });
+        }
+    });
 });
 
 describe('archive: session metadata', () => {

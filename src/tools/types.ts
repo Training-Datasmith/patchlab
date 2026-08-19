@@ -1,5 +1,11 @@
 import type { Image_Validation } from '../images.js';
 import type { Extractable_Artifact } from '../extractable_artifact.js';
+import type { Host_Access_Plan, Prepare_Host_Access_Context } from './host_access.js';
+
+export type { Host_Access_Plan, Host_File_Copy, Prepare_Host_Access_Context } from './host_access.js';
+export { HOST_PATCHLAB_INTERNAL } from './host_access.js';
+export type { Loaded_OpenCode_Settings } from '../opencode/settings.js';
+export { DEFAULT_LOADED_OPENCODE_SETTINGS } from '../opencode/settings.js';
 
 export type Authentication_Method = 'file_copy' | 'environment_variables' | 'none';
 
@@ -17,6 +23,25 @@ export type Authentication_Result =
  * reserved for a future `Container_Runtime` abstraction (engine selection,
  * networking, capabilities — runtime-side concerns, not image-baked).
  */
+export type Prompt_Passthrough_Capability = 'passthrough' | 'file';
+
+/** @deprecated Use `Launch_Context`. */
+export type Prompt_Launch_Context = Launch_Context;
+
+export interface Launch_Context {
+    /** True when launching after `patchlab resume` (session state restored). */
+    resume?: boolean;
+    /** Extra argv tokens from `--passthrough`, inserted before `-- <prompt>` or after `opencode`. */
+    extra_argv?: string[];
+    /** Container paths for OpenCode `run --file` (from `--prompt-file`). */
+    files?: string[];
+    /**
+     * False when the CLI will not exec the tool (`--no-interactive` without `-p`).
+     * Omitted/true means the returned argv will be executed.
+     */
+    exec?: boolean;
+}
+
 export interface Image_Specification {
     readonly base_image: string;
     readonly image_user: string;
@@ -62,7 +87,28 @@ export interface Tool_Provider {
         sandbox_id: string;
         container_name?: string;
     }): Authentication_Result;
-    get_launch_command(): string[];
+    get_launch_command(context?: Launch_Context): string[];
+    /**
+     * Optional one-shot prompt launch for `patchlab create|resume -p`. Providers
+     * that do not implement this reject `--prompt`.
+     */
+    get_prompt_launch_command?(prompt: string, context?: Launch_Context): string[];
+    /**
+     * Optional follow-up for `patchlab create|resume -p` when the first prompt run
+     * produced no assistant text. Returns argv for a second exec, or `null` when
+     * assistant text is already present or follow-up is not applicable.
+     */
+    maybe_prompt_output_followup?(
+        container_name: string,
+        working_directory: string,
+        prompt: string,
+        context?: Launch_Context,
+    ): string[] | null;
+    /**
+     * Declares support for `--passthrough` and/or `--prompt-file` on create/resume.
+     * Providers that omit this reject non-empty passthrough / prompt-file inputs.
+     */
+    get_prompt_passthrough_capabilities?(): readonly Prompt_Passthrough_Capability[];
     validate_image(image_tag: string): Image_Validation;
     get_cached_version(): string | null;
     get_openspec_tool_name(): string;
@@ -86,4 +132,11 @@ export interface Tool_Provider {
      * Default implementation: no-op.
      */
     inject_session_state(container_name: string, session_path: string): Promise<void>;
+
+    /**
+     * Optional host-side setup before container create (proxy, config staging).
+     * When implemented, provisioning merges `extra_hosts`, file copies, and
+     * extra environment variables from the returned plan.
+     */
+    prepare_host_access?(context: Prepare_Host_Access_Context): Promise<Host_Access_Plan | null>;
 }

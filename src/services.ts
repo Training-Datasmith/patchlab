@@ -12,7 +12,7 @@
 import type { Detected_Requirements } from './detect/index.js';
 import type { Prompter, Service_Selection } from './prompts.js';
 import { prompt_service_selection } from './prompts.js';
-import { query_running_containers, type Running_Container } from './podman.js';
+import { query_running_containers, type Running_Container } from './container_runtime.js';
 
 export interface Service_Mapping {
     environment_key: string;

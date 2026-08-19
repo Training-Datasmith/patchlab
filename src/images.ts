@@ -8,15 +8,17 @@ import {
     requires_php_source_installer,
     targets_php_source_image,
 } from './capabilities.js';
-import { image_exists, CONTAINER_UID } from './podman.js';
+import { exec_runtime, get_runtime_binary, runtime_host_tmpdir } from './container_runtime.js';
+import { image_exists, CONTAINER_UID } from './container_runtime.js';
 import { get_provider, compute_container_workspace_path } from './tools/index.js';
 import { logger } from './logger.js';
 
 export const CAPABILITIES_LABEL = 'biz.ecartz.patchlab.capabilities';
 
-// Podman-only by design for now; multi-runtime support (Docker / nerdctl /
-// Lima) is a future item.
-const RUNTIME = 'podman';
+/** Repository component of the default tag patchlab builds for a base image. */
+export function patchlab_image_repository_for_base(base_image: string): string {
+    return `patchlab/${base_image.replace(':', '-')}`;
+}
 
 // Image labeling convention for patchlab-compatible images.
 export const PATCHLAB_LABEL = 'biz.ecartz.patchlab.compatible';
@@ -38,7 +40,7 @@ export interface Patchlab_Image {
 export function list_images(): Patchlab_Image[] {
     try {
         const output = execFileSync(
-            RUNTIME,
+            get_runtime_binary(),
             ['images', '--filter', `label=${PATCHLAB_LABEL}=true`, '--format', 'json'],
             { stdio: 'pipe' }
         ).toString('utf-8').trim();
@@ -121,7 +123,11 @@ export function has_any_compatible_image(): boolean {
  *  capability labels AND passes `validate_image` (git present, tool binary
  *  working). Label-only matches are skipped so stale mis-built caches cannot
  *  satisfy the lookup. */
-export function get_default_image(required_tool?: string, required_capabilities?: string[]): string | null {
+export function get_default_image(
+    required_tool?: string,
+    required_capabilities?: string[],
+    required_base_image?: string,
+): string | null {
     let candidates = list_images().filter((image) => {
         if (required_tool !== undefined && !image.tools.includes(required_tool)) {
             return false;
@@ -131,6 +137,11 @@ export function get_default_image(required_tool?: string, required_capabilities?
             || (required_capabilities.length <= 0)
             || required_capabilities.every((cap) => image.capabilities.includes(cap));
     });
+
+    if (required_base_image !== undefined) {
+        const expected_repository = patchlab_image_repository_for_base(required_base_image);
+        candidates = candidates.filter((image) => image.repository === expected_repository);
+    }
 
     if (candidates.length === 0) {
         return null;
@@ -188,7 +199,7 @@ function repository_matches_provider_base(repository: string, provider_base: str
 export function remove_test_images(): void {
     try {
         const output = execFileSync(
-            RUNTIME,
+            get_runtime_binary(),
             ['images', '--filter', `label=${PATCHLAB_TEST_LABEL}=true`, '--format', '{{.ID}}'],
             { stdio: 'pipe' },
         ).toString('utf-8').trim();
@@ -200,7 +211,7 @@ export function remove_test_images(): void {
         const ids = output.split('\n').map(id => id.trim()).filter(Boolean);
         for (const id of ids) {
             try {
-                execFileSync(RUNTIME, ['rmi', '-f', id], { stdio: 'pipe' });
+                execFileSync(get_runtime_binary(), ['rmi', '-f', id], { stdio: 'pipe' });
             } catch (_image_in_use) {
                 /* image may be in use */
             }
@@ -246,7 +257,7 @@ export function validate_image(tag: string, tool_name?: string): Image_Validatio
 function image_has_git(tag: string): boolean {
     try {
         execFileSync(
-            RUNTIME,
+            get_runtime_binary(),
             ['run', '--rm', '--entrypoint', '', tag, 'git', '--version'],
             { stdio: 'pipe' },
         );
@@ -275,7 +286,7 @@ export function validate_or_remove_image(tag: string, tool_name?: string): Image
     if (!result.valid && image_exists(tag)) {
         logger().info(`Removing invalid image ${tag}: ${result.reasons.join(', ')}`);
         try {
-            execFileSync(RUNTIME, ['rmi', '-f', tag], { stdio: 'pipe' });
+            execFileSync(get_runtime_binary(), ['rmi', '-f', tag], { stdio: 'pipe' });
         } catch (_image_in_use) {
             /* image may be in use */
         }
@@ -319,7 +330,7 @@ export async function build_image(options?: Build_Image_Options): Promise<string
     // > provider's declared base_image. See design Decision 9.
     const base_image = options?.base_image ?? image_specification.base_image;
 
-    const tag = options?.tag ?? `patchlab/${base_image.replace(':', '-')}:latest`;
+    const tag = options?.tag ?? `${patchlab_image_repository_for_base(base_image)}:latest`;
 
     const image_user = image_specification.image_user;
     const container_working_directory = compute_container_workspace_path(primary_provider);
@@ -367,7 +378,7 @@ export async function build_image(options?: Build_Image_Options): Promise<string
     // Prepare build assets and dockerfile lines for all tools.
     // Secondary tools contribute their dockerfile lines / env / per-tool LABEL
     // but NOT their image_specification's image_user / image_home / base prep.
-    const build_context = fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-build-'));
+    const build_context = fs.mkdtempSync(path.join(runtime_host_tmpdir(), 'patchlab-build-'));
     try {
         const tool_contributions = await collect_tool_contributions(tools, build_context);
 
@@ -385,7 +396,7 @@ export async function build_image(options?: Build_Image_Options): Promise<string
         });
 
         execFileSync(
-            RUNTIME,
+            get_runtime_binary(),
             ['build', '-t', tag, '-f', '-', build_context],
             {
                 input: dockerfile,
@@ -425,6 +436,18 @@ async function collect_tool_contributions(
         provider_lines.push(...tool_image.get_dockerfile_lines([...build_assets.keys()]));
         Object.assign(provider_environment, tool_image.get_dockerfile_environment());
         tool_labels.push(`LABEL biz.ecartz.patchlab.tool.${tool_name}="installed"`);
+        const cached_version = provider.get_cached_version();
+        if (cached_version !== null) {
+            tool_labels.push(
+                `LABEL biz.ecartz.patchlab.tool.${tool_name}.version=${JSON.stringify(cached_version)}`,
+            );
+        }
+        const manifest_hash = (provider as { manifest_hash?: unknown }).manifest_hash;
+        if (typeof manifest_hash === 'string') {
+            tool_labels.push(
+                `LABEL biz.ecartz.patchlab.tool.${tool_name}.spec_hash=${JSON.stringify(manifest_hash)}`,
+            );
+        }
     }
 
     return { provider_lines, provider_environment, tool_labels };

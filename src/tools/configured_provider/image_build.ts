@@ -9,7 +9,7 @@
  * calls — no shared mutable state.
  */
 import { logger } from '../../logger.js';
-import { copy_to_container } from '../../podman.js';
+import { copy_to_container } from '../../container_runtime.js';
 import type {
     Authentication_Result,
     Image_Specification,

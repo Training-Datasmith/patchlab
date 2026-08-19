@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
 import { create_sandbox_from_directory, TEST_CONTAINER_WORKING_DIR } from '../test_helpers.js';
 import { DEFAULT_TEST_TOOL, write_default_test_tool_manifest_to_home } from '../helpers/stub_tool_provider.js';
+import { cli_subprocess_env } from '../helpers/home_directory.js';
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -10,7 +11,7 @@ import { destroy_sandbox } from '../../src/sandbox/index.js';
 import { diff_sandbox } from '../../src/changes.js';
 import { generate_patch } from '../../src/patches.js';
 import { apply_patch } from '../../src/apply.js';
-import { exec_container } from '../../src/podman.js';
+import { exec_container } from '../../src/container_runtime.js';
 import { assert_present } from '../helpers/assert_present.js';
 
 // NOTE: Do not remove shared images (patchlab/node-22-slim:*) in afterAll —
@@ -110,11 +111,7 @@ describe('CLI round-trip', () => {
                 stdio: ['ignore', 'pipe', 'pipe'],
                 timeout: 300000,
                 encoding: 'utf-8',
-                env: {
-                    ...process.env,
-                    HOME: home_directory,
-                    USERPROFILE: home_directory,
-                },
+                env: cli_subprocess_env(home_directory),
             },
         );
         if (result.status !== 0) {

@@ -58,10 +58,11 @@ export function resolve_source_inputs(
     ];
 
     const resolved: Source_Specification[] = all_inputs.map((entry) => {
-        const host_path = path.resolve(entry.host_path);
-        if (!fs.existsSync(host_path)) {
-            throw new Error(`Source directory not found: ${host_path}`);
+        const resolved_path = path.resolve(entry.host_path);
+        if (!fs.existsSync(resolved_path)) {
+            throw new Error(`Source directory not found: ${resolved_path}`);
         }
+        const host_path = fs.realpathSync(resolved_path);
         if (!fs.statSync(host_path).isDirectory()) {
             throw new Error(`Source path is not a directory: ${host_path}`);
         }

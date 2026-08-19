@@ -14,7 +14,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { execFileSync } from 'node:child_process';
-import type { Tool_State } from '../../../src/podman.js';
+import type { Tool_State } from '../../../src/container_runtime.js';
 import type { Tool_State_Mock_State, Create_Container_Call } from '../../helpers/podman_mock_tool_state.js';
 
 const state = vi.hoisted((): Tool_State_Mock_State => ({
@@ -26,12 +26,12 @@ const state = vi.hoisted((): Tool_State_Mock_State => ({
     create_container_calls: [] as Create_Container_Call[],
 }));
 
-vi.mock('../../../src/podman.js', async (importOriginal) => {
+vi.mock('../../../src/container_runtime.js', async (importOriginal) => {
     const { build_tool_state_podman_mock } = await import('../../helpers/podman_mock_tool_state.js');
     return build_tool_state_podman_mock(state, importOriginal);
 });
 
-import { get_image_tool_state } from '../../../src/podman.js';
+import { get_image_tool_state } from '../../../src/container_runtime.js';
 import { install_sandbox_cleanup_hooks } from '../../helpers/sandbox_cleanup.js';
 
 const mock_get_image_tool_state = get_image_tool_state as ReturnType<typeof vi.fn>;
@@ -97,6 +97,8 @@ describe('legacy "authenticated" label on env-var-method auth-tag image', () => 
             | { extra_environment_variables?: Record<string, string> }
             | undefined;
         expect(create_options?.extra_environment_variables).toEqual({
+            HOME: '/home/node',
+            USER: 'node',
             TEST_API_KEY: 'fresh-host-key-for-legacy-test',
         });
     });

@@ -21,8 +21,8 @@ const { mock_exec_container, mock_copy_from_container } = vi.hoisted(() => ({
     mock_copy_from_container: vi.fn<(name: string, container_path: string, host_path: string) => void>(),
 }));
 
-vi.mock('../../src/podman.js', async (importOriginal) => {
-    const original = await importOriginal<typeof import('../../src/podman.js')>();
+vi.mock('../../src/container_runtime.js', async (importOriginal) => {
+    const original = await importOriginal<typeof import('../../src/container_runtime.js')>();
     return {
         ...original,
         exec_container: mock_exec_container,

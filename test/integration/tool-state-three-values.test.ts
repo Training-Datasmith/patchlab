@@ -32,8 +32,8 @@ import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { exec_runtime_cli } from '../helpers/exec_runtime_cli.js';
 import {
-    destroy_sandbox,
     resume_sandbox,
 } from '../../src/sandbox/index.js';
 import {
@@ -50,7 +50,7 @@ import {
     container_exists,
     get_image_tool_state,
     is_patchlab_compatible_image,
-} from '../../src/podman.js';
+} from '../../src/container_runtime.js';
 import { register_provider } from '../../src/tools/provider.js';
 import { ensure_integration_test_tool_registered } from '../test_helpers.js';
 import { DEFAULT_TEST_TOOL } from '../helpers/stub_tool_provider.js';
@@ -59,6 +59,7 @@ import type {
     Authentication_Result,
     Tool_Provider,
 } from '../../src/tools/types.js';
+import { create_integration_cleanup_registry, register_destroy_sandbox } from '../helpers/integration_cleanup.js';
 
 const TEST_TAG = 'patchlab/tool-state-three-values-test:latest';
 const TEST_LABEL = `${PATCHLAB_TEST_LABEL}=true`;
@@ -116,7 +117,7 @@ function make_stub_provider(options: {
     };
 }
 
-const cleanup: (() => void)[] = [];
+const cleanup = create_integration_cleanup_registry();
 
 beforeAll(async () => {
     ensure_integration_test_tool_registered();
@@ -125,16 +126,8 @@ beforeAll(async () => {
     }
 }, 600_000);
 
-afterAll(() => {
-    for (const fn of cleanup.toReversed()) {
-        try {
-            fn();
-        } catch {
-            // Intentional: integration cleanup is best-effort. A teardown
-            // failure (container already gone, image already removed) must
-            // not prevent the remaining cleanup callbacks from running.
-        }
-    }
+afterAll(async () => {
+    await cleanup.run_all();
     remove_test_images();
 });
 
@@ -144,7 +137,7 @@ describe('7.1 — environment_variables result commits at -auth tag with label "
 
     it('build commits with label ready (not authenticated)', async () => {
         source_directory = make_source_directory();
-        cleanup.push(() => fs.rmSync(source_directory, { recursive: true, force: true }));
+        cleanup.register(() => fs.rmSync(source_directory, { recursive: true, force: true }));
 
         const stub = make_stub_provider({
             name: 'stub-env-71',
@@ -163,15 +156,7 @@ describe('7.1 — environment_variables result commits at -auth tag with label "
             allow_dirty_tree: true,
         });
         sandbox_id = manifest.id;
-        cleanup.push(() => {
-            (async () => {
-                try {
-                    await destroy_sandbox(sandbox_id, { force: true });
-                } catch {
-                    // best-effort
-                }
-            })();
-        });
+        register_destroy_sandbox(cleanup, sandbox_id);
 
         // The committed image at the -auth tag carries the new label value.
         const auth_tag = `patchlab/tool-state-three-values-test-${stub.name}-auth:latest`;
@@ -196,7 +181,7 @@ describe('7.1b — none result (env-var with vars unset) commits at no-auth tag 
 
     it('build commits with label installed at the no-auth tag', async () => {
         source_directory = make_source_directory();
-        cleanup.push(() => fs.rmSync(source_directory, { recursive: true, force: true }));
+        cleanup.register(() => fs.rmSync(source_directory, { recursive: true, force: true }));
 
         const stub = make_stub_provider({
             name: 'stub-env-71b',
@@ -215,15 +200,7 @@ describe('7.1b — none result (env-var with vars unset) commits at no-auth tag 
             allow_dirty_tree: true,
         });
         sandbox_id = manifest.id;
-        cleanup.push(() => {
-            (async () => {
-                try {
-                    await destroy_sandbox(sandbox_id, { force: true });
-                } catch {
-                    // best-effort
-                }
-            })();
-        });
+        register_destroy_sandbox(cleanup, sandbox_id);
 
         // The commit went to the no-auth tag (not the -auth tag) with label
         // 'installed'. No auth-tag image was created.
@@ -241,7 +218,7 @@ describe('7.2 — legacy authenticated label on env-var-method image is read-tol
 
     it('cache lookup hits the legacy image AND env var is passed at create-time', async () => {
         source_directory = make_source_directory();
-        cleanup.push(() => fs.rmSync(source_directory, { recursive: true, force: true }));
+        cleanup.register(() => fs.rmSync(source_directory, { recursive: true, force: true }));
 
         let inject_count = 0;
         const stub = make_stub_provider({
@@ -298,15 +275,7 @@ describe('7.2 — legacy authenticated label on env-var-method image is read-tol
             allow_dirty_tree: true,
         });
         sandbox_id = manifest.id;
-        cleanup.push(() => {
-            (async () => {
-                try {
-                    await destroy_sandbox(sandbox_id, { force: true });
-                } catch {
-                    // best-effort
-                }
-            })();
-        });
+        register_destroy_sandbox(cleanup, sandbox_id);
 
         // Assertion: the env-var phase did invoke inject_authentication
         // despite the legacy `'authenticated'` label on the cached image.
@@ -316,8 +285,7 @@ describe('7.2 — legacy authenticated label on env-var-method image is read-tol
         expect(inject_count).toBeGreaterThanOrEqual(1);
 
         // Assertion: the container received the env var.
-        const env_output = execFileSync(
-            'podman',
+        const env_output = exec_runtime_cli(
             ['inspect', '--format', '{{range .Config.Env}}{{println .}}{{end}}', manifest.container_name],
             { encoding: 'utf-8' },
         );
@@ -331,7 +299,7 @@ describe('7.3 — resume always re-injects for file_copy providers regardless of
 
     it('inject_authentication is invoked on BOTH create AND resume (no short-circuit on resume)', async () => {
         source_directory = make_source_directory();
-        cleanup.push(() => fs.rmSync(source_directory, { recursive: true, force: true }));
+        cleanup.register(() => fs.rmSync(source_directory, { recursive: true, force: true }));
 
         let inject_count = 0;
         const stub = make_stub_provider({
@@ -351,15 +319,7 @@ describe('7.3 — resume always re-injects for file_copy providers regardless of
             allow_dirty_tree: true,
         });
         sandbox_id = manifest.id;
-        cleanup.push(() => {
-            (async () => {
-                try {
-                    await destroy_sandbox(sandbox_id, { force: true });
-                } catch {
-                    // best-effort
-                }
-            })();
-        });
+        register_destroy_sandbox(cleanup, sandbox_id);
 
         // Create produced one invocation (auth was injected into the new
         // image; no cache hit yet at the auth tag).
@@ -399,7 +359,7 @@ describe('7.4 — resume always re-injects for environment_variables providers w
         // it like `'authenticated'`) would leave the resumed container
         // without the env var, breaking the tool at runtime.
         source_directory = make_source_directory();
-        cleanup.push(() => fs.rmSync(source_directory, { recursive: true, force: true }));
+        cleanup.register(() => fs.rmSync(source_directory, { recursive: true, force: true }));
 
         let inject_count = 0;
         const stub = make_stub_provider({
@@ -422,15 +382,7 @@ describe('7.4 — resume always re-injects for environment_variables providers w
             allow_dirty_tree: true,
         });
         sandbox_id = manifest.id;
-        cleanup.push(() => {
-            (async () => {
-                try {
-                    await destroy_sandbox(sandbox_id, { force: true });
-                } catch {
-                    // best-effort
-                }
-            })();
-        });
+        register_destroy_sandbox(cleanup, sandbox_id);
 
         // Create produced one invocation. Build committed `'ready'` at the
         // auth tag because env_var providers cannot bake credentials into
@@ -454,8 +406,7 @@ describe('7.4 — resume always re-injects for environment_variables providers w
         // var. A bug that short-circuited inject_authentication on resume
         // (treating `'ready'` as `'authenticated'`) would leave inject_count
         // at 1 AND would not pass the env var to the resumed container.
-        const env_output = execFileSync(
-            'podman',
+        const env_output = exec_runtime_cli(
             ['inspect', '--format', '{{range .Config.Env}}{{println .}}{{end}}', resumed.container_name],
             { encoding: 'utf-8' },
         );

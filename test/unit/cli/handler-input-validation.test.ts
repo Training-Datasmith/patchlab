@@ -28,6 +28,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { install_isolated_home_hooks } from '../../helpers/home_directory.js';
 import { DEFAULT_TEST_TOOL, register_default_test_tool } from '../../helpers/stub_tool_provider.js';
+import { OPENCODE_TOOL_NAME } from '../../../src/tools/index.js';
 
 vi.mock('../../../src/images.js', async (importOriginal) => {
     const actual = await importOriginal<typeof import('../../../src/images.js')>();
@@ -102,6 +103,71 @@ describe('CLI handlers — input-validation defense-in-depth', () => {
                 mount: ['extra-mount-a', 'extra-mount-b'],
             }),
         ).rejects.toThrow(/--mount supplied 2 times but only 1/);
+    });
+
+    it('handle_create_command rejects empty --prompt before create_sandbox', async () => {
+        const exit_spy = vi.spyOn(process, 'exit').mockImplementation((() => {
+            throw new Error('process.exit');
+        }) as typeof process.exit);
+
+        await expect(handle_create_command('/tmp/handle-create-validation-only', {
+            tool: DEFAULT_TEST_TOOL,
+            prompt: '   ',
+        })).rejects.toThrow('process.exit');
+
+        exit_spy.mockRestore();
+    });
+
+    it('handle_create_command rejects --prompt with --no-interactive', async () => {
+        const exit_spy = vi.spyOn(process, 'exit').mockImplementation((() => {
+            throw new Error('process.exit');
+        }) as typeof process.exit);
+
+        await expect(handle_create_command('/tmp/handle-create-validation-only', {
+            tool: DEFAULT_TEST_TOOL,
+            prompt: 'hello',
+            interactive: false,
+        })).rejects.toThrow('process.exit');
+
+        exit_spy.mockRestore();
+    });
+
+    it('handle_resume_command rejects empty --prompt before resume_sandbox', async () => {
+        const exit_spy = vi.spyOn(process, 'exit').mockImplementation((() => {
+            throw new Error('process.exit');
+        }) as typeof process.exit);
+
+        await expect(handle_resume_command('00000000-0000-4000-8000-000000000099', {
+            prompt: '   ',
+        })).rejects.toThrow('process.exit');
+
+        exit_spy.mockRestore();
+    });
+
+    it('handle_create_command rejects --prompt-file without -p', async () => {
+        const exit_spy = vi.spyOn(process, 'exit').mockImplementation((() => {
+            throw new Error('process.exit');
+        }) as typeof process.exit);
+
+        await expect(handle_create_command('/tmp/handle-create-validation-only', {
+            tool: OPENCODE_TOOL_NAME,
+            prompt_file: ['/tmp/spec.md'],
+        })).rejects.toThrow('process.exit');
+
+        exit_spy.mockRestore();
+    });
+
+    it('handle_resume_command rejects --prompt with --no-interactive', async () => {
+        const exit_spy = vi.spyOn(process, 'exit').mockImplementation((() => {
+            throw new Error('process.exit');
+        }) as typeof process.exit);
+
+        await expect(handle_resume_command('00000000-0000-4000-8000-000000000099', {
+            prompt: 'hello',
+            interactive: false,
+        })).rejects.toThrow('process.exit');
+
+        exit_spy.mockRestore();
     });
 });
 

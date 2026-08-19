@@ -21,7 +21,7 @@ import {
     read_session_metadata,
 } from '../../src/archive.js';
 import { read_manifest } from '../../src/manifest.js';
-import { exec_container } from '../../src/podman.js';
+import { exec_container } from '../../src/container_runtime.js';
 
 const GIT_ENVIRONMENT = {
     ...process.env,

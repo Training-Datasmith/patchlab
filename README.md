@@ -6,8 +6,35 @@ Patchlab spins up a Podman container with your source files, a git baseline, and
 
 ## Prerequisites
 
-- [Podman](https://podman.io/docs/installation) installed and running
-- Node.js 18+
+- A container runtime:
+  - **macOS (supported):** [Lima](https://lima-vm.io/) with nerdctl — see [macOS setup](#macos-setup-with-lima--nerdctl)
+  - **Linux / CI:** [Podman](https://podman.io/docs/installation) installed and running
+- Node.js 20+
+
+### macOS setup with Lima + nerdctl
+
+Patchlab auto-detects `nerdctl.lima` on macOS. Run the setup script:
+
+```bash
+./scripts/set-up-mac-containers.sh
+```
+
+Or install manually:
+
+```bash
+brew install lima
+limactl start
+nerdctl.lima run --rm hello-world
+```
+
+Add to your shell profile (`~/.zshrc`):
+
+```bash
+alias nerdctl='nerdctl.lima'
+export PATCHLAB_CONTAINER_RUNTIME=nerdctl   # optional; auto-detected on macOS
+```
+
+Set `PATCHLAB_CONTAINER_RUNTIME=podman` to force Podman instead. Linux defaults to Podman.
 
 ## Install
 
@@ -32,13 +59,15 @@ npm install -g patchlab
 ## Quick Start
 
 ```bash
-# Register a tool provider (once) — see documents/configuration-based-providers.md
-# Example: ~/.config/patchlab/tools/my-tool.yaml or ~/.patchlab/tools/my-tool.yaml
-
-# List available providers
+# List available providers (includes built-in OpenCode)
 patchlab list-tools
 
-# Create a sandbox and launch your configured tool
+# Default: OpenCode is built in — no registration needed
+patchlab create .
+
+# Custom tool: register a provider once, then pass --tool
+# See documents/configuration-based-providers.md
+# Example: ~/.config/patchlab/tools/my-tool.yaml or ~/.patchlab/tools/my-tool.yaml
 patchlab create . --tool my-tool
 
 # When the tool exits, patchlab automatically extracts a patch:
@@ -68,7 +97,7 @@ On exit, the patch is automatically extracted to a temp file.
 | `--source <path>` | Additional source directory (repeatable). Sources MAY span multiple git repositories. Each mounts at `${HOME}/workspace/<mount_name>/`. See [Multiple sources](#multiple-sources) and [Working across repositories](#working-across-repositories). |
 | `--mount <name>` | Container-side mount name for the corresponding positional source. Repeatable: the Nth `--mount` applies to the Nth source (0 = primary, 1 = first `--source`, etc.). REQUIRED for every source in a multi-repository create. |
 | `--image <image>` | Container image (default: auto-detected or `node:22-slim`) |
-| `--tool <name>` | AI coding tool to use (**required**). See [Tool Providers](#supported-tools). |
+| `--tool <name>` | AI coding tool to use (default: **OpenCode**; override with `--tool`, user-global `default_tool`, or per-repository `default_tool` after first-encounter confirmation). See [Tool Providers](#supported-tools). |
 | `--include <globs...>` | Glob patterns to include |
 | `--exclude <globs...>` | Glob patterns to exclude |
 | `--no-install` | Skip automatic `npm install` |
@@ -78,8 +107,12 @@ On exit, the patch is automatically extracted to a temp file.
 | `--allow-socket-mount` | Allow Podman/Docker socket mount without prompting |
 | `--deny-socket-mount` | Deny socket mount without prompting |
 | `--no-interactive` | Skip interactive AI tool launch (for scripts/CI) |
+| `-p, --prompt [text]` | Run a one-shot prompt when the tool supports it; omit text or use `-p -` to read stdin. Incompatible with `--no-interactive`. Tool exit code propagated after extraction. Place `-p` before the source path when piping stdin (`patchlab create . -p`); `patchlab create -p ./src` treats `./src` as the prompt text, not the source. |
+| `--passthrough <token>` | Forward argv tokens to the tool launch command (repeatable). Works for interactive TUI and `-p`. Use `--passthrough=--flag` for flag-like tokens. Incompatible with `--no-interactive` unless `-p` is also set (OpenCode rejects passthrough when the tool is not launched). |
+| `--prompt-file <path>` | Stage a host file into `$HOME/context/` and pass it to OpenCode `run --file` (repeatable; requires `-p`). |
 | `--memory` / `--cpus` / `--pids-limit` / `--blkio-weight` | Per-invocation resource limits (see [Resource limits](#resource-limits)) |
 | `--strict-trust` / `--allow-untrusted-manifests` | Trust-prompt behavior for per-source tool manifests in non-interactive mode (see [Supported Tools](#supported-tools)) |
+| `--allow-untrusted-default-tool` | Non-interactive opt-in for per-repository `default_tool` when `--tool` is omitted (separate from `--allow-untrusted-manifests`; see [Configuration](documents/configuration.md#default_tool)) |
 
 ### Multiple sources
 
@@ -178,6 +211,9 @@ Resume a patchlab in a fresh sandbox from the branch tip plus a host overlay. Ea
 | `--context <paths...>` | Additional context files to merge with the previous session's context |
 | `--no-install` | Skip automatic dependency install |
 | `--no-interactive` | Skip interactive AI tool launch (for scripts/CI) |
+| `-p, --prompt [text]` | Run a one-shot prompt when the tool supports it; omit text or use `-p -` to read stdin. Incompatible with `--no-interactive`. Tool exit code propagated after extraction. Place `-p` before the source path when piping stdin (`patchlab create . -p`); `patchlab create -p ./src` treats `./src` as the prompt text, not the source. |
+| `--passthrough <token>` | Forward argv tokens to the tool launch command (repeatable). Works for interactive TUI and `-p`. Use `--passthrough=--flag` for flag-like tokens. Incompatible with `--no-interactive` unless `-p` is also set (OpenCode rejects passthrough when the tool is not launched). |
+| `--prompt-file <path>` | Stage a host file into `$HOME/context/` and pass it to OpenCode `run --file` (repeatable; requires `-p`). |
 | `--memory` / `--cpus` / `--pids-limit` / `--blkio-weight` | Resource-limit overrides for this resume (otherwise inherited from the prior session) |
 
 ### `patchlab list`
@@ -229,7 +265,7 @@ List locally available patchlab-compatible images.
 
 ### `patchlab list-tools [source]`
 
-List registered tool providers from user-global manifests (`~/.config/patchlab/tools/` and `~/.patchlab/tools/`). Pass a source path to also include per-source manifests under `<repository_root>/.patchlab/tools/`; unconfirmed per-source manifests are annotated without firing the trust prompt.
+List registered tool providers from user-global manifests (`~/.config/patchlab/tools/` and `~/.patchlab/tools/`). Pass a source path to also include per-source manifests under `<repository_root>/.patchlab/tools/`; unconfirmed per-source manifests are annotated without firing the trust prompt. Providers that support `patchlab create|resume -p` are marked with `[-p]`.
 
 ### `patchlab destroy <sandbox>`
 
@@ -323,10 +359,10 @@ The `sources` array lets you declare a stable set of source directories once so 
 Run from the directory containing this file:
 
 ```bash
-patchlab create --tool my-tool   # uses sources from .patchlab.json
+patchlab create   # uses sources from .patchlab.json; tool from --tool, config, or built-in OpenCode
 ```
 
-`--tool` is always required on the command line; `.patchlab.json` does not store a default tool.
+`--tool` overrides per-repository and user-global `default_tool` in `.patchlab/configuration.yaml`. `.patchlab.json` does not store a default tool.
 
 **String entries** — each string is both a relative path to the source directory (resolved from the `.patchlab.json` file's directory) and the mount name under `workspace/` inside the sandbox. For example, `"patchlab"` mounts the `patchlab/` directory at `~/workspace/patchlab/` in the sandbox. Use a subdirectory path (`"patchlab/src"`) to limit what is included; the git repository root is still auto-discovered from the path, and the mount name is the full string (`patchlab/src`).
 
@@ -353,9 +389,11 @@ Object entries behave identically to passing `--source <path> --mount <mount>` o
 
 ## Supported Tools
 
-Patchlab ships no built-in tool providers. Register providers via YAML manifests under `~/.config/patchlab/tools/` or `~/.patchlab/tools/` (user-global) or `<repository>/.patchlab/tools/` (per-source). Run `patchlab list-tools` to see what is available, then pass `--tool <name>` to `create`.
+Patchlab ships **OpenCode** as the built-in default tool. `patchlab create .` launches OpenCode without `--tool`. See [documents/opencode.md](documents/opencode.md) for host config copy, credentials, and local-model proxying.
 
-See [documents/configuration-based-providers.md](documents/configuration-based-providers.md) for the manifest format.
+Additional providers are registered via YAML manifests under `~/.config/patchlab/tools/` or `~/.patchlab/tools/` (user-global) or `<repository>/.patchlab/tools/` (per-source). Run `patchlab list-tools` to see what is available.
+
+See [documents/configuration-based-providers.md](documents/configuration-based-providers.md) for the manifest format. To replace the built-in OpenCode provider, use `overrides_builtin: true` in a manifest named `opencode`.
 
 Patchlab tags each built image with a per-tool state label (`biz.ecartz.patchlab.tool.<tool>`) that records what authentication was done at build time. The four values are:
 
@@ -364,8 +402,11 @@ Patchlab tags each built image with a per-tool state label (`biz.ecartz.patchlab
 - **`authenticated`**: the tool binary AND credentials are baked into the image filesystem (file-copy authentication).
 - **`ready`**: the tool binary is in the image, and `inject_authentication` ran at build time, but the credentials are NOT in the image — they are supplied at container-create time via environment variable.
 
+OpenCode uses authentication method `none`, so its cached images typically carry the `installed` label. Configured providers with `file_copy` or `environment_variables` authentication use the other states as documented above.
+
 ```bash
 patchlab list-tools
+patchlab create .
 patchlab create . --tool my-tool
 ```
 
@@ -420,3 +461,7 @@ The `--verbose` flag is reserved at the program level; subcommands SHALL NOT def
 4. **Apply**: You review the patch and apply it to your source directory when ready.
 
 Cached images are reused across sandboxes to speed up subsequent creates. Patchlab auto-detects project language, required system packages, and services from your project files.
+
+## License
+
+Patchlab is licensed under the [GNU General Public License v3.0 or later](LICENSE) (SPDX: `GPL-3.0-or-later`). See [LICENSE](LICENSE) for the full license text.

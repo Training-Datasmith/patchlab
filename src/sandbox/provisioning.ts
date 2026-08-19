@@ -25,6 +25,9 @@ import {
 } from '../branch/index.js';
 import {
     check_required_for_resume,
+    claim_session_directory,
+    discard_unwritten_session,
+    write_claimed_session_metadata,
     write_initial_session_metadata,
 } from './session_archive.js';
 import {
@@ -63,21 +66,39 @@ import {
     DEFAULT_IMAGE,
     container_name_for,
     create_container,
+    provider_image_environment,
     start_container,
+    stop_container,
     stop_and_remove_container_best_effort,
+    finalize_resumed_container,
+    rename_container,
+    resume_staging_container_name,
     container_exists,
     was_authentication_attempted_at_build,
-} from '../podman.js';
+    runtime_host_tmpdir,
+} from '../container_runtime.js';
 import {
     resolve_effective_image,
     set_up_image_tier,
     type Resolved_Image,
 } from './image_tier.js';
-import { compute_container_workspace_path, get_provider, register_per_source_manifests } from '../tools/index.js';
+import {
+    compute_container_workspace_path,
+    get_provider,
+    register_per_source_manifests,
+    resolve_create_tool_name,
+} from '../tools/index.js';
+import {
+    inject_provider_host_files,
+    prepare_provider_host_access,
+    stop_prepared_host_access,
+    type Prepared_Host_Access,
+} from './host_access.js';
 import {
     verify_per_source_trust_multi_repository,
     type Confirm_Per_Source_Options,
 } from '../tools/configured_provider/trust_verification.js';
+import { verify_per_source_default_tool } from '../tools/default_tool_trust.js';
 import type { Authentication_Result } from '../tools/types.js';
 
 import {
@@ -97,6 +118,7 @@ import {
     read_persisted_resource_limits,
 } from './persisted_resource_limits.js';
 import type { Loaded_Configuration } from '../configuration.js';
+import { stop_host_proxy } from '../local_model_proxy/manager.js';
 import { warn_once_if_unsupported } from '../cgroups.js';
 
 export interface Create_Sandbox_Options {
@@ -184,6 +206,12 @@ export interface Create_Sandbox_Options {
      */
     strict_trust?: boolean;
     /**
+     * Carry `--allow-untrusted-default-tool` into the library for non-interactive
+     * callers that need to apply a conflicting per-source `default_tool` without
+     * prompting or writing a preference.
+     */
+    allow_untrusted_default_tool?: boolean;
+    /**
      * When true, scan each source's composer.json for a `name` field, cross-
      * reference against other sources' `require`/`require-dev` entries, and
      * configure matching packages as composer path repositories in the
@@ -210,17 +238,20 @@ function inject_pre_create_authentication(
     provider: ReturnType<typeof get_provider>,
     sandbox_id: string,
 ): { authentication_result: Authentication_Result; extra_environment_variables: Record<string, string> } {
-    const extra_environment_variables: Record<string, string> = {};
     if (provider.get_authentication_method() !== 'environment_variables') {
-        return { authentication_result: { type: 'none' }, extra_environment_variables };
+        return { authentication_result: { type: 'none' }, extra_environment_variables: {} };
     }
+
+    const extra_environment_variables: Record<string, string> = {};
     const authentication_result = provider.inject_authentication({ sandbox_id });
     if (authentication_result.type === 'environment_variables') {
         for (const entry of authentication_result.entries) {
             extra_environment_variables[entry.name] = entry.value;
         }
+        return { authentication_result, extra_environment_variables };
     }
-    return { authentication_result, extra_environment_variables };
+
+    return { authentication_result: { type: 'none' }, extra_environment_variables };
 }
 
 /**
@@ -228,8 +259,9 @@ function inject_pre_create_authentication(
  * `podman cp` into the running container, so injection runs AFTER create.
  * The inject-skip uses `was_authentication_attempted_at_build` so a cached
  * image carrying either `'authenticated'` (credentials baked into image
- * bytes) or `'ready'` short-circuits the re-copy. The outer
- * `get_authentication_method() === 'file_copy'` gate prevents a legacy
+ * bytes) or `'ready'` short-circuits the re-copy on create. Resume passes
+ * `{ always_inject: true }` so credentials are re-read from the host every
+ * time. The outer `get_authentication_method() === 'file_copy'` gate prevents a legacy
  * `'authenticated'` label on an env-var-method image from reaching this
  * site (env-var providers route through the pre-create phase, which always
  * re-injects on every container creation).
@@ -240,14 +272,62 @@ function inject_post_create_authentication(
     container_name: string,
     image_resolution: Resolved_Image,
     prior_authentication_result: Authentication_Result,
+    options?: { always_inject?: boolean },
 ): Authentication_Result {
     if (provider.get_authentication_method() !== 'file_copy') {
         return prior_authentication_result;
     }
-    if (was_authentication_attempted_at_build(image_resolution.tool_state)) {
+    if (
+        !options?.always_inject
+        && was_authentication_attempted_at_build(image_resolution.tool_state)
+    ) {
         return { type: 'file_copy' };
     }
     return provider.inject_authentication({ sandbox_id, container_name });
+}
+
+/**
+ * Gate `--copy` paths that match secret-file patterns. Shared by create and
+ * resume so both flows require explicit confirmation before secrets enter the
+ * sandbox or the image is tagged as auth.
+ */
+async function confirm_secret_copy_paths_or_abort(
+    copy_paths: Copy_Specification[],
+    prompter: Prompter | null | undefined,
+    operation: 'create' | 'resume',
+): Promise<string[]> {
+    const secret_copy_paths = detect_secret_copies(copy_paths);
+    if (secret_copy_paths.length === 0) {
+        return secret_copy_paths;
+    }
+
+    const path_list = secret_copy_paths.map((p) => `  • ${p}`).join('\n');
+    const confirmed = await (prompter?.confirm(
+        'The following --copy sources match a secret-file pattern (.env, *.pem, SSH keys, etc.):\n'
+        + path_list + '\n'
+        + 'The AI tool will have read access to this content, and the sandbox image will be tagged as auth. '
+        + 'Proceed? [y/N]',
+    ) ?? Promise.resolve(false));
+    if (!confirmed) {
+        throw new Error(`Secret-file --copy not confirmed; ${operation} aborted.`);
+    }
+    return secret_copy_paths;
+}
+
+/**
+ * Secret files accepted by the user: promote a 'none' auth result to
+ * 'file_copy' so set_up_image_tier uses the -auth tag and 'authenticated'
+ * label. When the provider already performed real authentication, the auth
+ * tag is already guaranteed.
+ */
+function promote_authentication_for_secret_copies(
+    secret_copy_paths: string[],
+    authentication_result: Authentication_Result,
+): Authentication_Result {
+    if (secret_copy_paths.length > 0 && authentication_result.type === 'none') {
+        return { type: 'file_copy' };
+    }
+    return authentication_result;
 }
 
 
@@ -262,8 +342,11 @@ function rollback_failed_create(
     sandbox_directory: string,
     patchlab_id: string,
     created_branch_repositories: string[],
+    prepared_host_access?: Prepared_Host_Access,
 ): void {
     stop_and_remove_container_best_effort(container_name);
+    void stop_prepared_host_access(prepared_host_access);
+    stop_host_proxy(patchlab_id);
 
     if (created_branch_repositories.length > 0) {
         rollback_phase_2_created_branches(created_branch_repositories, patchlab_id);
@@ -320,114 +403,126 @@ async function provision_new_sandbox(input: Provision_New_Sandbox_Input): Promis
     );
     const limit_create_options = resolved_limits_to_create_options(resolved_limits);
 
-    const image_resolution = resolve_effective_image(image, tool_name, provider, options);
-    let effective_image = image_resolution.effective_image;
+    let prepared_host_access: Prepared_Host_Access | undefined;
+    try {
+        prepared_host_access = await prepare_provider_host_access(provider, {
+            sandbox_id: patchlab_id,
+            sandbox_directory,
+            loaded_configuration: options?.loaded_configuration ?? EMPTY_LOADED_CONFIGURATION,
+        });
 
-    const secret_copy_paths = detect_secret_copies(options?.copy_paths ?? []);
-    if (secret_copy_paths.length > 0) {
-        // One prompt listing all offending paths. The outcome is all-or-nothing
-        // (proceed with every copy or abort), so per-path prompts would mislead
-        // the user into thinking they can accept some and reject others.
-        // If we add the ability to accept some and reject others, we'll need to
-        // rework this prompt to handle that.
-        const path_list = secret_copy_paths.map((p) => `  • ${p}`).join('\n');
-        const confirmed = await (options?.prompter?.confirm(
-            'The following --copy sources match a secret-file pattern (.env, *.pem, SSH keys, etc.):\n'
-            + path_list + '\n'
-            + 'The AI tool will have read access to this content, and the sandbox image will be tagged as auth. '
-            + 'Proceed? [y/N]',
-        ) ?? Promise.resolve(false));
-        if (!confirmed) {
-            throw new Error('Secret-file --copy not confirmed; create aborted.');
-        }
-    }
+        const image_resolution = resolve_effective_image(image, tool_name, provider, options);
+        let effective_image = image_resolution.effective_image;
 
-    const pre_create = inject_pre_create_authentication(provider, patchlab_id);
-    const { extra_environment_variables } = pre_create;
-    let authentication_result = pre_create.authentication_result;
-
-    create_container(container_name, effective_image, {
-        volume_mounts: resolved_volume_mounts,
-        environment_variables: resolved_environment_variables,
-        extra_environment_variables: Object.keys(extra_environment_variables).length > 0 ? extra_environment_variables : undefined,
-        memory_limit: limit_create_options.memory_limit,
-        cpu_limit: limit_create_options.cpu_limit,
-        pids_limit: limit_create_options.pids_limit,
-        blkio_weight: limit_create_options.blkio_weight,
-    });
-    start_container(container_name);
-
-    authentication_result = inject_post_create_authentication(
-        provider, patchlab_id, container_name, image_resolution, authentication_result,
-    );
-
-    // Secret files accepted by the user: promote a 'none' auth result to
-    // 'file_copy' so set_up_image_tier uses the -auth tag and 'authenticated'
-    // label. This marks the image as containing sensitive content. When the
-    // provider already performed real authentication (file_copy or
-    // environment_variables), the auth tag is already guaranteed.
-    if (secret_copy_paths.length > 0 && authentication_result.type === 'none') {
-        authentication_result = { type: 'file_copy' };
-    }
-
-    effective_image = set_up_image_tier(
-        container_name, effective_image, image_resolution, tool_name, authentication_result, provider, options,
-    );
-
-    // Workspace population. A source whose `mount_name` is empty
-    // (single-source-at-repository-root with no override) lands its contents
-    // at `${working_directory}/` directly; non-empty mounts land at
-    // `${working_directory}/<mount_name>/`. The container's git repository
-    // initializes AFTER the copy loop so it sees every mount as a top-level
-    // subdirectory.
-    copy_multi_source_files(container_name, sources, options, working_directory);
-    copy_additional_paths(container_name, options?.copy_paths ?? [], working_directory);
-    initialize_sandbox_git_baseline(container_name, working_directory);
-
-    if (options?.composer_path_repositories) {
-        configure_composer_path_repositories(container_name, sources, working_directory);
-    }
-
-    if (!options?.no_install) {
-        install_dependencies(container_name, working_directory);
-    }
-
-    if (resolved_npm_packages.length > 0) {
-        install_npm_packages(container_name, resolved_npm_packages, working_directory);
-    }
-
-    const manifest = create_manifest(patchlab_id, sources, container_name, image, {
-        include: options?.include,
-        exclude: options?.exclude,
-        baseline_commit_shas,
-        branch_creation_point_shas,
-    });
-    manifest.effective_image = effective_image;
-    manifest.tool = tool_name;
-    manifest.volume_mounts = resolved_volume_mounts;
-    manifest.environment_variables = resolved_environment_variables;
-    manifest.npm_packages = resolved_npm_packages;
-    write_manifest(sandbox_directory, manifest);
-
-    const session_number = write_initial_session_metadata(
-        patchlab_id, tool_name, container_name, manifest, resolved_limits,
-    );
-
-    if (options?.context_paths && options.context_paths.length > 0) {
-        inject_context_bundle(
-            patchlab_id,
-            session_number,
-            container_name,
-            provider.image_specification.image_home,
-            options.context_paths,
+        const secret_copy_paths = await confirm_secret_copy_paths_or_abort(
+            options?.copy_paths ?? [],
+            options?.prompter,
+            'create',
         );
-    }
 
-    if (options?.copy_paths && options.copy_paths.length > 0) {
-        copy_workspace_copies_to_archive(options.copy_paths, patchlab_id, session_number);
-    }
+        const pre_create = inject_pre_create_authentication(provider, patchlab_id);
+        const { extra_environment_variables: auth_extra_environment_variables } = pre_create;
+        let authentication_result = pre_create.authentication_result;
 
-    return manifest;
+        const merged_extra_environment_variables: Record<string, string> = {
+            ...provider_image_environment(
+                provider.image_specification.image_home,
+                provider.image_specification.image_user,
+            ),
+            ...prepared_host_access.extra_environment_variables,
+            ...auth_extra_environment_variables,
+        };
+
+        create_container(container_name, effective_image, {
+            volume_mounts: resolved_volume_mounts,
+            environment_variables: resolved_environment_variables,
+            extra_environment_variables: Object.keys(merged_extra_environment_variables).length > 0
+                ? merged_extra_environment_variables
+                : undefined,
+            extra_hosts: prepared_host_access.extra_hosts.length > 0
+                ? prepared_host_access.extra_hosts
+                : undefined,
+            memory_limit: limit_create_options.memory_limit,
+            cpu_limit: limit_create_options.cpu_limit,
+            pids_limit: limit_create_options.pids_limit,
+            blkio_weight: limit_create_options.blkio_weight,
+        });
+        start_container(container_name);
+
+        inject_provider_host_files(container_name, prepared_host_access.file_copies, { fail_on_error: true });
+
+        authentication_result = inject_post_create_authentication(
+            provider, patchlab_id, container_name, image_resolution, authentication_result,
+        );
+
+        authentication_result = promote_authentication_for_secret_copies(
+            secret_copy_paths,
+            authentication_result,
+        );
+
+        effective_image = set_up_image_tier(
+            container_name, effective_image, image_resolution, tool_name, authentication_result, provider, options,
+        );
+
+        // Workspace population. A source whose `mount_name` is empty
+        // (single-source-at-repository-root with no override) lands its contents
+        // at `${working_directory}/` directly; non-empty mounts land at
+        // `${working_directory}/<mount_name>/`. The container's git repository
+        // initializes AFTER the copy loop so it sees every mount as a top-level
+        // subdirectory.
+        copy_multi_source_files(container_name, sources, options, working_directory);
+        copy_additional_paths(container_name, options?.copy_paths ?? [], working_directory);
+        initialize_sandbox_git_baseline(container_name, working_directory);
+
+        if (options?.composer_path_repositories) {
+            configure_composer_path_repositories(container_name, sources, working_directory);
+        }
+
+        if (!options?.no_install) {
+            install_dependencies(container_name, working_directory);
+        }
+
+        if (resolved_npm_packages.length > 0) {
+            install_npm_packages(container_name, resolved_npm_packages, working_directory);
+        }
+
+        const manifest = create_manifest(patchlab_id, sources, container_name, image, {
+            include: options?.include,
+            exclude: options?.exclude,
+            baseline_commit_shas,
+            branch_creation_point_shas,
+        });
+        manifest.effective_image = effective_image;
+        manifest.tool = tool_name;
+        manifest.volume_mounts = resolved_volume_mounts;
+        manifest.environment_variables = resolved_environment_variables;
+        manifest.npm_packages = resolved_npm_packages;
+        write_manifest(sandbox_directory, manifest);
+
+        const session_number = write_initial_session_metadata(
+            patchlab_id, tool_name, container_name, manifest, resolved_limits,
+        );
+
+        if (options?.context_paths && options.context_paths.length > 0) {
+            inject_context_bundle(
+                patchlab_id,
+                session_number,
+                container_name,
+                provider.image_specification.image_home,
+                options.context_paths,
+            );
+        }
+
+        if (options?.copy_paths && options.copy_paths.length > 0) {
+            copy_workspace_copies_to_archive(options.copy_paths, patchlab_id, session_number);
+        }
+
+        return manifest;
+    } catch (error) {
+        await stop_prepared_host_access(prepared_host_access);
+        stop_host_proxy(patchlab_id);
+        throw error;
+    }
 }
 
 /**
@@ -520,11 +615,30 @@ export async function create_sandbox(
     const id = crypto.randomUUID();
     const dirty_repositories = await execute_phase_1_preflight(repositories, id, options);
 
-    if (options?.tool === undefined || options.tool === '') {
-        throw new Error('create_sandbox requires options.tool');
+    if (options?.tool !== undefined && options.tool === '') {
+        throw new Error('create_sandbox requires a non-empty options.tool when set');
     }
 
-    const tool_name = options.tool;
+    const loaded_configuration = options?.loaded_configuration ?? EMPTY_LOADED_CONFIGURATION;
+
+    let per_source_override: string | null | undefined = undefined;
+    if (options?.tool === undefined) {
+        const default_tool_resolution = await verify_per_source_default_tool(
+            repositories,
+            loaded_configuration,
+            {
+                prompter: options?.prompter ?? null,
+                allow_untrusted_default_tool: options?.allow_untrusted_default_tool,
+            },
+        );
+        per_source_override = default_tool_resolution.override;
+    }
+
+    const tool_name = resolve_create_tool_name(
+        options?.tool,
+        loaded_configuration,
+        per_source_override,
+    );
     const provider = get_provider(tool_name);
     const image = options?.image ?? DEFAULT_IMAGE;
     const name = container_name_for(id);
@@ -640,9 +754,10 @@ export interface Resume_Sandbox_Options {
     copy_paths?: Copy_Specification[];
     /**
      * Prompter for interactive confirmations during resume (active-sandbox
-     * replacement and oversized-archive gating). `null` in non-interactive
-     * contexts: active-sandbox throws; oversized-archive throws via the
-     * undefined-callback path in `archive.ts`.
+     * replacement, secret-file `--copy` gating, and oversized-archive gating).
+     * `null` in non-interactive contexts: active-sandbox and secret `--copy`
+     * throw; oversized-archive throws via the undefined-callback path in
+     * `archive.ts`.
      */
     prompter?: Prompter | null;
     /** Cap on the branch-archive size before the user is asked to confirm. Defaults to 256 MB. */
@@ -670,6 +785,12 @@ export interface Resume_Sandbox_Options {
      * carries the prior session's create-time choices forward).
      */
     loaded_configuration?: Loaded_Configuration;
+    /**
+     * Optional hook after provider resolution and required-artifact validation,
+     * before active-sandbox confirmation or container removal. Throwing aborts
+     * resume with no mutation.
+     */
+    provider_preflight?: (provider: ReturnType<typeof get_provider>) => void;
 }
 
 /**
@@ -737,10 +858,11 @@ interface Provision_Resumed_Sandbox_Input {
 
 /**
  * Provision the resumed container: build the host-overlay staging directory
- * from files NOT tracked on the patchlab branch, create the container, extract
- * the branch tip into the workspace, overlay the staged host files, initialize
- * the git baseline, then write the new session's manifest and metadata. Throws
- * on failure; the caller's catch path tears down the new container.
+ * from files NOT tracked on the patchlab branch, create a staging container,
+ * extract the branch tip into the workspace, overlay the staged host files,
+ * initialize the git baseline, then restore session state and workspace copies.
+ * Returns a manifest draft without writing it — the caller finalizes the
+ * container name and commits manifest/session metadata after success.
  *
  * For multi-source patchlabs we iterate each source: the branch-tip exclusion
  * set is the union of repository-relative paths across all mounted prefixes,
@@ -758,147 +880,206 @@ interface Provision_Resumed_Sandbox_Input {
  * spec anti-scenario "Sandbox resume always re-injects for file_copy providers
  * regardless of image label" in image-caching.
  */
-async function provision_resumed_sandbox(input: Provision_Resumed_Sandbox_Input): Promise<Sandbox_Manifest> {
+interface Provision_Resumed_Sandbox_Result {
+    manifest: Sandbox_Manifest;
+    session_number: number;
+    resolved_limits: ReturnType<typeof resolve_resource_limits>;
+    tool_name: string;
+}
+
+async function provision_resumed_sandbox(input: Provision_Resumed_Sandbox_Input): Promise<Provision_Resumed_Sandbox_Result> {
     const {
         patchlab_id, sandbox_directory, previous_manifest,
         new_container_name, working_directory, image, provider, tool_name,
         overlay_staging_directory, options,
     } = input;
 
-    // Per-source branch-tip file enumeration. The exclusion-set keys are
-    // mount-name-relative (matching the container's workspace layout), which
-    // is what the overlay step checks. Computed BEFORE container creation so
-    // the overlay staging directory is fully prepared first.
-    const branch_name = patchlab_branch_name(patchlab_id);
-    const branch_files = build_branch_file_set(previous_manifest, branch_name);
-    overlay_multi_source_host_files(
-        previous_manifest.sources,
-        overlay_staging_directory,
-        previous_manifest.include_globs,
-        previous_manifest.exclude_globs,
-        branch_files,
-    );
+    let prepared_host_access: Prepared_Host_Access | undefined;
+    let claimed_session_number: number | undefined;
+    try {
+        const secret_copy_paths = await confirm_secret_copy_paths_or_abort(
+            options?.copy_paths ?? [],
+            options?.prompter,
+            'resume',
+        );
 
-    // Reuse the create-path injection: `inject_pre_create_authentication`
-    // runs BEFORE podman-create on both flows. Resume only needs the env-var
-    // map; the `authentication_result` payload is for file_copy providers,
-    // which resume handles separately downstream via `inject_post_create_authentication`.
-    const { extra_environment_variables } = inject_pre_create_authentication(provider, patchlab_id);
+        const image_resolution = resolve_effective_image(image, tool_name, provider);
+        let effective_image = image_resolution.effective_image;
 
-    // Resolve resource limits for the resume container. The manifest layer
-    // reads from the most-recent prior session's persisted `resource_limits`
-    // block (null when the prior session predates this feature). CLI overrides
-    // on `patchlab resume` win when present.
-    const persisted_limits = read_persisted_resource_limits(patchlab_id);
-    const resolved_limits = resolve_resource_limits(
-        options?.loaded_configuration ?? EMPTY_LOADED_CONFIGURATION,
-        persisted_limits,
-        options?.cli_resource_overrides ?? {},
-    );
-    const limit_create_options = resolved_limits_to_create_options(resolved_limits);
+        // Per-source branch-tip file enumeration. The exclusion-set keys are
+        // mount-name-relative (matching the container's workspace layout), which
+        // is what the overlay step checks. Computed BEFORE container creation so
+        // the overlay staging directory is fully prepared first.
+        const branch_name = patchlab_branch_name(patchlab_id);
+        const branch_files = build_branch_file_set(previous_manifest, branch_name);
+        overlay_multi_source_host_files(
+            previous_manifest.sources,
+            overlay_staging_directory,
+            previous_manifest.include_globs,
+            previous_manifest.exclude_globs,
+            branch_files,
+        );
 
-    create_container(new_container_name, image, {
-        volume_mounts: previous_manifest.volume_mounts,
-        environment_variables: previous_manifest.environment_variables,
-        extra_environment_variables: Object.keys(extra_environment_variables).length > 0 ? extra_environment_variables : undefined,
-        memory_limit: limit_create_options.memory_limit,
-        cpu_limit: limit_create_options.cpu_limit,
-        pids_limit: limit_create_options.pids_limit,
-        blkio_weight: limit_create_options.blkio_weight,
-    });
-    start_container(new_container_name);
-
-    if (provider.get_authentication_method() === 'file_copy') {
-        provider.inject_authentication({
+        // Reuse the create-path injection: `inject_pre_create_authentication`
+        // runs BEFORE podman-create on both flows. Resume only needs the env-var
+        // map; the `authentication_result` payload is for file_copy providers,
+        // which resume handles separately downstream via `inject_post_create_authentication`.
+        prepared_host_access = await prepare_provider_host_access(provider, {
             sandbox_id: patchlab_id,
-            container_name: new_container_name,
+            sandbox_directory,
+            loaded_configuration: options?.loaded_configuration ?? EMPTY_LOADED_CONFIGURATION,
         });
-    }
+        const pre_create = inject_pre_create_authentication(provider, patchlab_id);
+        let authentication_result = pre_create.authentication_result;
+        const merged_extra_environment_variables: Record<string, string> = {
+            ...provider_image_environment(
+                provider.image_specification.image_home,
+                provider.image_specification.image_user,
+            ),
+            ...prepared_host_access.extra_environment_variables,
+            ...pre_create.extra_environment_variables,
+        };
 
-    // Order matters: extract the branch tip first (so file modes from the git
-    // tree survive intact), then overlay host files without overwriting
-    // anything that already exists.
-    prepare_workspace(new_container_name, working_directory);
-    // Per-source branch-tip export. Each source emits its own
-    // `git archive --prefix=<mount_name>/ <branch>[:<source_prefix>]` so the
-    // tar lands at the correct mount path with no post-extraction rename.
-    // Sources sharing one `repository_root` MUST run sequentially (git's
-    // index lock is exclusive per `.git`); across repos serial-or-concurrent
-    // is fine. The streaming step is sequential because the container target
-    // is a single workspace. Conservative choice: serial across everything.
-    const confirm_oversized = build_oversized_confirm(options?.prompter ?? null);
-    for (const source of previous_manifest.sources) {
-        await export_per_source_branch_tip_to_container(
-            source,
+        // Resolve resource limits for the resume container. The manifest layer
+        // reads from the most-recent prior session's persisted `resource_limits`
+        // block (null when the prior session predates this feature). CLI overrides
+        // on `patchlab resume` win when present.
+        const persisted_limits = read_persisted_resource_limits(patchlab_id);
+        const resolved_limits = resolve_resource_limits(
+            options?.loaded_configuration ?? EMPTY_LOADED_CONFIGURATION,
+            persisted_limits,
+            options?.cli_resource_overrides ?? {},
+        );
+        const limit_create_options = resolved_limits_to_create_options(resolved_limits);
+
+        create_container(new_container_name, effective_image, {
+            volume_mounts: previous_manifest.volume_mounts,
+            environment_variables: previous_manifest.environment_variables,
+            extra_environment_variables: Object.keys(merged_extra_environment_variables).length > 0
+                ? merged_extra_environment_variables
+                : undefined,
+            extra_hosts: prepared_host_access.extra_hosts.length > 0
+                ? prepared_host_access.extra_hosts
+                : undefined,
+            memory_limit: limit_create_options.memory_limit,
+            cpu_limit: limit_create_options.cpu_limit,
+            pids_limit: limit_create_options.pids_limit,
+            blkio_weight: limit_create_options.blkio_weight,
+        });
+        start_container(new_container_name);
+
+        inject_provider_host_files(new_container_name, prepared_host_access.file_copies, { fail_on_error: true });
+
+        authentication_result = inject_post_create_authentication(
+            provider, patchlab_id, new_container_name, image_resolution, authentication_result,
+            { always_inject: true },
+        );
+        authentication_result = promote_authentication_for_secret_copies(
+            secret_copy_paths,
+            authentication_result,
+        );
+        if (secret_copy_paths.length > 0) {
+            effective_image = set_up_image_tier(
+                new_container_name, effective_image, image_resolution, tool_name, authentication_result, provider,
+            );
+        }
+
+        // Order matters: extract the branch tip first (so file modes from the git
+        // tree survive intact), then overlay host files without overwriting
+        // anything that already exists.
+        prepare_workspace(new_container_name, working_directory);
+        // Per-source branch-tip export. Each source emits its own
+        // `git archive --prefix=<mount_name>/ <branch>[:<source_prefix>]` so the
+        // tar lands at the correct mount path with no post-extraction rename.
+        // Sources sharing one `repository_root` MUST run sequentially (git's
+        // index lock is exclusive per `.git`); across repos serial-or-concurrent
+        // is fine. The streaming step is sequential because the container target
+        // is a single workspace. Conservative choice: serial across everything.
+        const confirm_oversized = build_oversized_confirm(options?.prompter ?? null);
+        for (const source of previous_manifest.sources) {
+            await export_per_source_branch_tip_to_container(
+                source,
+                patchlab_id,
+                new_container_name,
+                working_directory,
+                {
+                    max_size_bytes: options?.max_archive_size_bytes,
+                    confirm_oversized,
+                },
+            );
+        }
+        overlay_into_container(new_container_name, overlay_staging_directory, working_directory);
+        initialize_sandbox_git_baseline(new_container_name, working_directory);
+
+        if (!options?.no_install) {
+            install_dependencies(new_container_name, working_directory);
+        }
+
+        if (previous_manifest.npm_packages && previous_manifest.npm_packages.length > 0) {
+            install_npm_packages(new_container_name, previous_manifest.npm_packages, working_directory);
+        }
+
+        const updated_manifest: Sandbox_Manifest = {
+            ...previous_manifest,
+            container_name: new_container_name,
+            ...(secret_copy_paths.length > 0 ? { effective_image } : {}),
+        };
+
+        claimed_session_number = claim_session_directory(patchlab_id);
+        const session_number = claimed_session_number;
+
+        const previous_session_number = session_number - 1;
+        if (previous_session_number >= 1) {
+            await restore_previous_session_state(
+                provider, new_container_name, patchlab_id, previous_session_number,
+            );
+        }
+
+        // Merge previous session's context with new --context inputs. The merged
+        // set is what the new session will own.
+        inject_resume_context(
             patchlab_id,
+            session_number,
+            previous_session_number,
             new_container_name,
-            working_directory,
-            {
-                max_size_bytes: options?.max_archive_size_bytes,
-                confirm_oversized,
-            },
+            provider.image_specification.image_home,
+            options?.context_paths ?? []
         );
-    }
-    overlay_into_container(new_container_name, overlay_staging_directory, working_directory);
-    initialize_sandbox_git_baseline(new_container_name, working_directory);
 
-    if (!options?.no_install) {
-        install_dependencies(new_container_name, working_directory);
-    }
-
-    if (previous_manifest.npm_packages && previous_manifest.npm_packages.length > 0) {
-        install_npm_packages(new_container_name, previous_manifest.npm_packages, working_directory);
-    }
-
-    const updated_manifest: Sandbox_Manifest = {
-        ...previous_manifest,
-        container_name: new_container_name,
-    };
-    write_manifest(sandbox_directory, updated_manifest);
-
-    const session_number = write_initial_session_metadata(
-        patchlab_id, tool_name, new_container_name, updated_manifest, resolved_limits,
-    );
-
-    const previous_session_number = session_number - 1;
-    if (previous_session_number >= 1) {
-        await restore_previous_session_state(
-            provider, new_container_name, patchlab_id, previous_session_number,
+        // Merge previous session's workspace copies with new --copy inputs, archive
+        // the full resolved set, then restore into the container workspace. Branch-tip
+        // files are skipped (branch tip is authoritative for non-gitignored copies).
+        const workspace_copies_merge = merge_resume_workspace_copies(
+            build_session_path(patchlab_id, previous_session_number, 'workspace-copies'),
+            options?.copy_paths ?? [],
+            patchlab_id,
+            session_number,
         );
+        for (const warning of workspace_copies_merge.warnings) {
+            logger().warn(`Warning: ${warning}`);
+        }
+
+        restore_workspace_copies(
+            new_container_name,
+            provider.image_specification.image_home,
+            build_session_path(patchlab_id, session_number, 'workspace-copies'),
+            branch_files,
+        );
+
+        return {
+            manifest: updated_manifest,
+            session_number,
+            resolved_limits,
+            tool_name,
+        };
+    } catch (error) {
+        if (claimed_session_number !== undefined) {
+            discard_unwritten_session(patchlab_id, claimed_session_number);
+        }
+        await stop_prepared_host_access(prepared_host_access);
+        stop_host_proxy(patchlab_id);
+        throw error;
     }
-
-    // Merge previous session's context with new --context inputs. The merged
-    // set is what the new session will own.
-    inject_resume_context(
-        patchlab_id,
-        session_number,
-        previous_session_number,
-        new_container_name,
-        provider.image_specification.image_home,
-        options?.context_paths ?? []
-    );
-
-    // Merge previous session's workspace copies with new --copy inputs, archive
-    // the full resolved set, then restore into the container workspace. Branch-tip
-    // files are skipped (branch tip is authoritative for non-gitignored copies).
-    const workspace_copies_merge = merge_resume_workspace_copies(
-        build_session_path(patchlab_id, previous_session_number, 'workspace-copies'),
-        options?.copy_paths ?? [],
-        patchlab_id,
-        session_number,
-    );
-    for (const warning of workspace_copies_merge.warnings) {
-        logger().warn(`Warning: ${warning}`);
-    }
-
-    restore_workspace_copies(
-        new_container_name,
-        provider.image_specification.image_home,
-        build_session_path(patchlab_id, session_number, 'workspace-copies'),
-        branch_files,
-    );
-
-    return updated_manifest;
 }
 
 /**
@@ -1002,32 +1183,38 @@ export async function resume_sandbox(
         check_required_for_resume(patchlab_id, previous_session_for_check, provider);
     }
 
+    if (options?.provider_preflight) {
+        options.provider_preflight(provider);
+    }
+
     await confirm_active_sandbox_if_needed(previous_manifest, patchlab_id, options);
-    // Resume is a destructive replace: the new container reuses the SAME
-    // deterministic name (container_name_for(patchlab_id) === the previous
-    // container's name), so the old container MUST be removed before the new
-    // one is created — provisioning the replacement first would collide on the
-    // name. If provisioning then fails, the manifest still names the (now
-    // removed) container, but no data is lost: the session's work lives on the
-    // `patchlab/{id}` branch tip, and re-running `resume` rebuilds from it.
-    stop_and_remove_container_best_effort(previous_manifest.container_name);
 
     // Surface the cgroup-unsupported warning before the resume container is
     // created. Same warn-once latch as the create path.
     warn_once_if_unsupported();
 
-    const new_container_name = container_name_for(patchlab_id);
+    const previous_container_name = previous_manifest.container_name;
+    const final_container_name = container_name_for(patchlab_id);
+    const staging_container_name = resume_staging_container_name(patchlab_id);
     const working_directory = compute_container_workspace_path(provider);
     const image = previous_manifest.effective_image ?? previous_manifest.container_image;
 
-    const overlay_staging_directory = fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-resume-overlay-'));
+    const overlay_staging_directory = fs.mkdtempSync(path.join(runtime_host_tmpdir(), 'patchlab-resume-overlay-'));
 
+    let previous_backup_name: string | null = null;
+    let previous_was_stopped = false;
+    let provision_result: Provision_Resumed_Sandbox_Result | undefined;
     try {
-        return await provision_resumed_sandbox({
+        if (container_exists(previous_container_name)) {
+            stop_container(previous_container_name);
+            previous_was_stopped = true;
+        }
+
+        provision_result = await provision_resumed_sandbox({
             patchlab_id,
             sandbox_directory,
             previous_manifest,
-            new_container_name,
+            new_container_name: staging_container_name,
             working_directory,
             image,
             provider,
@@ -1035,8 +1222,72 @@ export async function resume_sandbox(
             overlay_staging_directory,
             options,
         });
+
+        previous_backup_name = finalize_resumed_container(
+            staging_container_name,
+            previous_container_name,
+            final_container_name,
+            patchlab_id,
+        );
+
+        const final_manifest: Sandbox_Manifest = {
+            ...provision_result.manifest,
+            container_name: final_container_name,
+        };
+        write_manifest(sandbox_directory, final_manifest);
+        write_claimed_session_metadata(
+            patchlab_id,
+            provision_result.session_number,
+            provision_result.tool_name,
+            final_container_name,
+            final_manifest,
+            provision_result.resolved_limits,
+        );
+
+        if (previous_backup_name !== null) {
+            stop_and_remove_container_best_effort(previous_backup_name);
+        }
+
+        return final_manifest;
     } catch (error) {
-        stop_and_remove_container_best_effort(new_container_name);
+        if (
+            previous_backup_name !== null
+            && container_exists(previous_backup_name)
+        ) {
+            stop_and_remove_container_best_effort(final_container_name);
+            try {
+                rename_container(previous_backup_name, final_container_name);
+            } catch (restore_error) {
+                const restore_message = restore_error instanceof Error
+                    ? restore_error.message
+                    : String(restore_error);
+                logger().warn(
+                    `Warning: failed to restore previous container after resume rollback — ${restore_message}`,
+                );
+            }
+        } else {
+            stop_and_remove_container_best_effort(staging_container_name);
+        }
+
+        write_manifest(sandbox_directory, previous_manifest);
+        if (provision_result !== undefined) {
+            discard_unwritten_session(patchlab_id, provision_result.session_number);
+        }
+
+        if (previous_was_stopped && container_exists(previous_container_name)) {
+            try {
+                start_container(previous_container_name);
+            } catch (restart_error) {
+                const restart_message = restart_error instanceof Error
+                    ? restart_error.message
+                    : String(restart_error);
+                logger().warn(
+                    `Warning: failed to restart previous container after resume rollback — ${restart_message}`,
+                );
+            }
+        }
+
+        stop_host_proxy(patchlab_id);
         throw error;
     } finally {
         fs.rmSync(overlay_staging_directory, { recursive: true, force: true });

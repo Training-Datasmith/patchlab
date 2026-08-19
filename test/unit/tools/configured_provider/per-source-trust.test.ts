@@ -470,6 +470,24 @@ describe('confirm_per_source_manifests behaviors (task 6.6, 6.18)', () => {
         expect(joined).toContain('libpq-dev');
     });
 
+    it('discloses prompt_launch_command and prompt_resume_launch_command when set', async () => {
+        const warnings: string[] = [];
+        const manifest = make_manifest({
+            prompt_launch_command: ['my-tool', '{{prompt}}'],
+            prompt_resume_launch_command: ['my-tool', '--continue', '{{prompt}}'],
+        });
+        try {
+            await confirm_per_source_manifests(repository_root, [manifest], [], 'p'.repeat(64), {
+                output_warn: (line) => warnings.push(line),
+            });
+        } catch (_ignored) {
+            /* expected */
+        }
+        const joined = warnings.join('\n');
+        expect(joined).toContain('prompt_launch_command');
+        expect(joined).toContain('prompt_resume_launch_command');
+    });
+
     it('renders cross-machine-reproducibility note when a host path uses `~`/`$HOME` (task 1.10 / 3.3)', async () => {
         const warnings: string[] = [];
         const manifest = make_manifest({

@@ -15,14 +15,16 @@ import {
 } from '../../extractable_artifact.js';
 import type { Image_Validation } from '../../images.js';
 import { logger } from '../../logger.js';
-import { copy_to_container, exec_container } from '../../podman.js';
+import { copy_to_container, exec_container } from '../../container_runtime.js';
 import { find_escape_symlinks } from '../../symlink_compatibility.js';
 import type {
     Authentication_Method,
     Authentication_Result,
     Image_Specification,
+    Launch_Context,
     Tool_Provider,
 } from '../types.js';
+import { expand_prompt_launch_argv } from './artifacts.js';
 import {
     build_image_specification,
     inject_authentication_environment_variables,
@@ -32,7 +34,7 @@ import {
 import { compute_manifest_hash, format_warning } from './trust_hash.js';
 import type { Configured_Tool_Provider_Manifest } from './types.js';
 
-const RUNTIME = 'podman';
+import { get_runtime_binary } from '../../container_runtime.js';
 
 /**
  * Synthesized `Tool_Provider` implementation built from a parsed manifest.
@@ -46,6 +48,7 @@ export class Configured_Tool_Provider implements Tool_Provider {
     readonly name: string;
     readonly display_name: string;
     readonly image_specification: Image_Specification;
+    declare get_prompt_launch_command?: Tool_Provider['get_prompt_launch_command'];
 
     /** Path to the manifest file this provider was synthesized from. Used by
      *  `list-tools` for the source label. */
@@ -75,6 +78,20 @@ export class Configured_Tool_Provider implements Tool_Provider {
         this.manifest_path = manifest_path;
         this.manifest_hash = compute_manifest_hash(manifest);
         this.repository_root = repository_root;
+
+        if (manifest.prompt_launch_command !== undefined) {
+            const create_argv = manifest.prompt_launch_command;
+            const resume_argv = manifest.prompt_resume_launch_command;
+            this.get_prompt_launch_command = (
+                prompt: string,
+                context?: Launch_Context,
+            ): string[] => {
+                const template = context?.resume && resume_argv !== undefined
+                    ? resume_argv
+                    : create_argv;
+                return expand_prompt_launch_argv(template, prompt);
+            };
+        }
     }
 
     inject_authentication(context: {
@@ -105,7 +122,7 @@ export class Configured_Tool_Provider implements Tool_Provider {
         );
     }
 
-    get_launch_command(): string[] {
+    get_launch_command(_context?: Launch_Context): string[] {
         return [...this.manifest.launch_command];
     }
 
@@ -116,7 +133,7 @@ export class Configured_Tool_Provider implements Tool_Provider {
         }
 
         try {
-            execFileSync(RUNTIME, [
+            execFileSync(get_runtime_binary(), [
                 'run', '--rm', '--entrypoint', '',
                 '--user', this.image_specification.image_user,
                 '--workdir', this.image_specification.image_home,

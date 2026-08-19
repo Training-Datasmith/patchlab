@@ -32,6 +32,23 @@ import {
     type Unlimited,
 } from './resource_limits.js';
 import { is_plain_object } from './json_validators.js';
+import { logger } from './logger.js';
+import type { Loaded_OpenCode_Settings } from './opencode/settings.js';
+import { OPENCODE_TOOL_NAME } from './opencode/index.js';
+
+/** User-global tool-specific configuration blocks, keyed by tool name. */
+export type Loaded_Tool_Configuration = Readonly<
+    Record<string, Readonly<Record<string, unknown>>>
+>;
+
+/**
+ * Parsed contents of one configuration file on disk.
+ */
+export interface Parsed_Configuration_File {
+    resource_limits: Loaded_Resource_Limits;
+    default_tool: string | null;
+    tool_configuration: Record<string, Partial<Loaded_OpenCode_Settings>> | null;
+}
 
 /**
  * Per-field loaded shape. Each field is `value | "unlimited" | null` where
@@ -56,13 +73,32 @@ export interface Loaded_Resource_Limits {
 export interface Loaded_Configuration {
     user_global: Loaded_Resource_Limits | null;
     per_source: Loaded_Resource_Limits | null;
+    /** User-global default tool name; null falls through to built-in OpenCode. */
+    default_tool: string | null;
+    /** User-global tool-specific configuration, keyed by tool name. */
+    tool_configuration: Loaded_Tool_Configuration;
+    /**
+     * Per-repository `default_tool` values from each repo's configuration.yaml
+     * (pre-trust). Keyed by `repository_root`. Repositories that omit the field
+     * are absent from this map.
+     */
+    per_repository_default_tools: Readonly<Record<string, string>>;
 }
 
 const ACCEPTED_YAML_KEYS = new Set<string>(
     RESOURCE_LIMIT_FIELD_MAP.map((entry) => entry.on_disk_key),
 );
 
-const ACCEPTED_TOP_LEVEL_KEYS = new Set<string>(['resource_limits']);
+const ACCEPTED_TOP_LEVEL_KEYS = new Set<string>(['resource_limits', 'default_tool', 'tool_configuration']);
+
+const KNOWN_TOOL_CONFIGURATION_TOOLS = new Set<string>([OPENCODE_TOOL_NAME]);
+
+const OPENCODE_SETTINGS_KEYS = new Set<string>([
+    'copy_host_configuration',
+    'copy_host_auth',
+    'proxy_local_models',
+    'environment',
+]);
 
 /** 64 KiB — well above any realistic v1 configuration (which fits in <200 bytes). */
 export const CONFIGURATION_FILE_SIZE_CAP_BYTES = 64 * 1024;
@@ -126,12 +162,88 @@ export function per_source_configuration_path(repository_root: string): string {
  * reaching into the resolver's `runtime_default`.
  */
 export function load_configuration(repository_roots: readonly string[]): Loaded_Configuration {
-    const user_global = load_configuration_file(user_global_configuration_path());
-    const per_repository = repository_roots.map((repository_root) =>
-        load_configuration_file(per_source_configuration_path(repository_root)),
+    const user_global_parsed = load_full_configuration_file(user_global_configuration_path());
+    const per_repository_limits: (Loaded_Resource_Limits | null)[] = [];
+    const per_repository_default_tools: Record<string, string> = {};
+
+    for (const repository_root of repository_roots) {
+        const parsed = load_full_configuration_file(per_source_configuration_path(repository_root));
+        if (parsed !== null) {
+            warn_ignored_per_source_tool_configuration(parsed, per_source_configuration_path(repository_root));
+            if (parsed.default_tool !== null) {
+                per_repository_default_tools[repository_root] = parsed.default_tool;
+            }
+        }
+
+        per_repository_limits.push(parsed?.resource_limits ?? null);
+    }
+
+    const per_source = compose_per_source_loaded_resource_limits(per_repository_limits, repository_roots);
+
+    const user_global_limits = user_global_parsed?.resource_limits ?? null;
+    const default_tool = user_global_parsed?.default_tool ?? null;
+    const tool_configuration = normalize_loaded_tool_configuration(
+        user_global_parsed?.tool_configuration ?? null,
     );
-    const per_source = compose_per_source_loaded_resource_limits(per_repository, repository_roots);
-    return { user_global, per_source };
+
+    return {
+        user_global: user_global_limits,
+        per_source,
+        default_tool,
+        tool_configuration,
+        per_repository_default_tools,
+    };
+}
+
+/**
+ * Build a `Loaded_Configuration` for tests and resolver call sites that only
+ * care about resource limits.
+ */
+export function loaded_configuration_with_resource_limits(
+    user_global: Loaded_Resource_Limits | null,
+    per_source: Loaded_Resource_Limits | null,
+    overrides?: {
+        default_tool?: string | null;
+        tool_configuration?: Loaded_Tool_Configuration | null;
+        per_repository_default_tools?: Readonly<Record<string, string>>;
+    },
+): Loaded_Configuration {
+    return {
+        user_global,
+        per_source,
+        default_tool: overrides?.default_tool ?? null,
+        tool_configuration: normalize_loaded_tool_configuration(
+            overrides?.tool_configuration ?? null,
+        ),
+        per_repository_default_tools: overrides?.per_repository_default_tools ?? {},
+    };
+}
+
+function normalize_loaded_tool_configuration(
+    parsed: Record<string, Partial<Loaded_OpenCode_Settings>> | Loaded_Tool_Configuration | null,
+): Loaded_Tool_Configuration {
+    if (parsed === null) {
+        return {};
+    }
+
+    const loaded: Record<string, Readonly<Record<string, unknown>>> = {};
+    for (const [tool_name, block] of Object.entries(parsed)) {
+        loaded[tool_name] = { ...block };
+    }
+
+    return loaded;
+}
+
+function warn_ignored_per_source_tool_configuration(
+    parsed: Parsed_Configuration_File,
+    file_path: string,
+): void {
+    if (parsed.tool_configuration !== null) {
+        logger().verbose(
+            `Ignoring per-source tool_configuration in ${file_path}; `
+            + `configure tools under tool_configuration in ~/.patchlab/configuration.yaml instead.`,
+        );
+    }
 }
 
 /**
@@ -297,6 +409,24 @@ function compare_decimal_strings(a: string, b: string): number {
  * file parses cleanly. Throws on any malformation.
  */
 export function load_configuration_file(file_path: string): Loaded_Resource_Limits | null {
+    const parsed = load_full_configuration_file(file_path);
+    return parsed?.resource_limits ?? null;
+}
+
+/**
+ * Load one configuration file including resource limits, default_tool, and
+ * tool_configuration settings. Returns `null` when the file is absent.
+ */
+export function load_full_configuration_file(file_path: string): Parsed_Configuration_File | null {
+    const yaml_text = read_configuration_yaml_text(file_path);
+    if (yaml_text === null) {
+        return null;
+    }
+
+    return parse_configuration_yaml(yaml_text, file_path);
+}
+
+function read_configuration_yaml_text(file_path: string): string | null {
     // Use `statSync` (which follows symlinks naturally) — symlinks to regular
     // files are followed; broken symlinks throw ENOENT and become "absent";
     // symlinks pointing at directories return a directory stat and we skip.
@@ -335,21 +465,21 @@ export function load_configuration_file(file_path: string): Loaded_Resource_Limi
         );
     }
 
-    return parse_configuration_yaml(yaml_text, file_path);
+    return yaml_text;
 }
 
 /**
- * Parse one configuration file's YAML text into a `Loaded_Resource_Limits`.
+ * Parse one configuration file's YAML text into a `Parsed_Configuration_File`.
  * Aliases are disabled at the parser level (`maxAliasCount: 0`) — the v1
  * schema is flat and aliases would be an unnecessary attack surface
- * (billion-laughs DoS). A file that parses cleanly but contains no
- * `resource_limits` key is treated as "no settings here, fall through":
- * returns an object with all four fields `null`.
+ * (billion-laughs DoS). A file that parses cleanly but omits optional
+ * top-level keys is treated as "no settings here, fall through": returns
+ * empty resource-limit fields, `default_tool: null`, and `tool_configuration: null`.
  */
 function parse_configuration_yaml(
     yaml_text: string,
     file_path: string,
-): Loaded_Resource_Limits {
+): Parsed_Configuration_File {
     let parsed: unknown;
     try {
         parsed = YAML.parse(yaml_text, { maxAliasCount: 0 });
@@ -362,7 +492,7 @@ function parse_configuration_yaml(
 
     // Empty file (YAML `null`) is equivalent to "no settings".
     if (parsed === null || parsed === undefined) {
-        return empty_loaded_resource_limits();
+        return empty_parsed_configuration_file();
     }
 
     if (!is_plain_object(parsed)) {
@@ -375,28 +505,154 @@ function parse_configuration_yaml(
         if (!ACCEPTED_TOP_LEVEL_KEYS.has(key)) {
             throw new Error(
                 `${file_path}: unknown top-level key "${key}" `
-                + `(only "resource_limits" is accepted in v1)`,
+                + `(accepted keys: ${[...ACCEPTED_TOP_LEVEL_KEYS].join(', ')})`,
             );
         }
     }
 
-    const resource_limits_raw = (parsed as Record<string, unknown>).resource_limits;
-    if (resource_limits_raw === undefined) {
-        // File parsed cleanly but has no `resource_limits` key — that's fine.
-        return empty_loaded_resource_limits();
-    }
+    const root = parsed as Record<string, unknown>;
+    let resource_limits = empty_loaded_resource_limits();
+    const resource_limits_raw = root.resource_limits;
+    if (resource_limits_raw !== undefined) {
+        if (!is_plain_object(resource_limits_raw)) {
+            throw new Error(
+                `${file_path}: "resource_limits" must be a mapping `
+                + `(expected keys: ${listed_accepted_keys()})`,
+            );
+        }
 
-    if (!is_plain_object(resource_limits_raw)) {
-        throw new Error(
-            `${file_path}: "resource_limits" must be a mapping `
-            + `(expected keys: ${listed_accepted_keys()})`,
+        resource_limits = yaml_resource_limits_to_loaded(
+            resource_limits_raw as Record<string, unknown>,
+            file_path,
         );
     }
 
-    return yaml_resource_limits_to_loaded(
-        resource_limits_raw as Record<string, unknown>,
-        file_path,
-    );
+    const default_tool = parse_default_tool(root.default_tool, file_path);
+    const tool_configuration = parse_tool_configuration(root.tool_configuration, file_path);
+
+    return { resource_limits, default_tool, tool_configuration };
+}
+
+function empty_parsed_configuration_file(): Parsed_Configuration_File {
+    return {
+        resource_limits: empty_loaded_resource_limits(),
+        default_tool: null,
+        tool_configuration: null,
+    };
+}
+
+function parse_default_tool(raw: unknown, file_path: string): string | null {
+    if (raw === undefined || raw === null) {
+        return null;
+    }
+
+    if (typeof raw !== 'string' || raw.trim() === '') {
+        throw new Error(
+            `${file_path}: default_tool must be a non-empty string when set`,
+        );
+    }
+
+    return raw.trim();
+}
+
+function parse_tool_configuration(
+    raw: unknown,
+    file_path: string,
+): Record<string, Partial<Loaded_OpenCode_Settings>> | null {
+    if (raw === undefined || raw === null) {
+        return null;
+    }
+
+    if (!is_plain_object(raw)) {
+        throw new Error(`${file_path}: tool_configuration must be a mapping`);
+    }
+
+    const loaded: Record<string, Partial<Loaded_OpenCode_Settings>> = {};
+    for (const [tool_name, tool_raw] of Object.entries(raw)) {
+        if (!KNOWN_TOOL_CONFIGURATION_TOOLS.has(tool_name)) {
+            throw new Error(
+                `${file_path}: unknown tool "${tool_name}" under tool_configuration `
+                + `(known tools: ${[...KNOWN_TOOL_CONFIGURATION_TOOLS].join(', ')})`,
+            );
+        }
+
+        const block_path = `${file_path}: tool_configuration.${tool_name}`;
+        if (tool_name === OPENCODE_TOOL_NAME) {
+            const parsed = parse_opencode_settings(tool_raw, block_path);
+            if (parsed !== null) {
+                loaded[tool_name] = parsed;
+            }
+        }
+    }
+
+    return Object.keys(loaded).length > 0 ? loaded : null;
+}
+
+function parse_opencode_settings(
+    raw: unknown,
+    field_path: string,
+): Partial<Loaded_OpenCode_Settings> | null {
+    if (raw === undefined || raw === null) {
+        return null;
+    }
+
+    if (!is_plain_object(raw)) {
+        throw new Error(`${field_path} must be a mapping`);
+    }
+
+    for (const key of Object.keys(raw)) {
+        if (!OPENCODE_SETTINGS_KEYS.has(key)) {
+            throw new Error(
+                `${field_path}: unknown key "${key}" `
+                + `(accepted keys: ${[...OPENCODE_SETTINGS_KEYS].join(', ')})`,
+            );
+        }
+    }
+
+    const settings: Partial<Loaded_OpenCode_Settings> = {};
+
+    if (raw.copy_host_configuration !== undefined && raw.copy_host_configuration !== null) {
+        settings.copy_host_configuration = parse_boolean(
+            raw.copy_host_configuration,
+            `${field_path}.copy_host_configuration`,
+        );
+    }
+
+    if (raw.copy_host_auth !== undefined && raw.copy_host_auth !== null) {
+        settings.copy_host_auth = parse_boolean(raw.copy_host_auth, `${field_path}.copy_host_auth`);
+    }
+    if (raw.proxy_local_models !== undefined && raw.proxy_local_models !== null) {
+        settings.proxy_local_models = parse_boolean(
+            raw.proxy_local_models,
+            `${field_path}.proxy_local_models`,
+        );
+    }
+
+    if (raw.environment !== undefined && raw.environment !== null) {
+        if (!is_plain_object(raw.environment)) {
+            throw new Error(`${field_path}.environment must be a mapping`);
+        }
+        const environment: Record<string, string> = {};
+        for (const [key, value] of Object.entries(raw.environment)) {
+            if (typeof value !== 'string') {
+                throw new Error(
+                    `${field_path}.environment.${key} must be a string`,
+                );
+            }
+            environment[key] = value;
+        }
+        settings.environment = environment;
+    }
+
+    return settings;
+}
+
+function parse_boolean(raw: unknown, field_label: string): boolean {
+    if (typeof raw !== 'boolean') {
+        throw new Error(`${field_label} must be a boolean`);
+    }
+
+    return raw;
 }
 
 /**

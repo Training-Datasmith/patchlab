@@ -4,6 +4,7 @@ import { build_archive_path } from '../archive.js';
 import { logger } from '../logger.js';
 import {
     delete_patchlab_branch,
+    delete_patchlab_branch_in_repositories,
     is_git_repository,
     patchlab_branch_name,
     patchlab_id_from_branch_name,
@@ -14,12 +15,14 @@ import {
 import {
     manifest_repositories,
     read_manifest,
+    try_read_manifest_repository_roots,
     type Sandbox_Manifest,
 } from '../manifest.js';
 import {
     container_name_for,
     stop_and_remove_container_best_effort,
-} from '../podman.js';
+} from '../container_runtime.js';
+import { stop_host_proxy } from '../local_model_proxy/manager.js';
 import { list_sandboxes, type Sandbox_Info } from './inspect.js';
 
 export interface Garbage_Collection_Options {
@@ -151,7 +154,7 @@ export async function garbage_collect_sandboxes(options?: Garbage_Collection_Opt
                 : undefined,
         });
 
-        if (Object.values(result.branch_outcomes).includes('skipped')) {
+        if (Object.values(result.branch_outcomes).includes('skipped') || !result.archive_removed) {
             skipped.push(sandbox);
         } else {
             destroyed.push(sandbox);
@@ -366,7 +369,7 @@ export interface Destroy_Sandbox_Result {
     /**
      * Per-repository branch-cleanup outcomes from `delete_patchlab_branch`, keyed
      * on `manifest_repositories(manifest)` for the destroyed patchlab. Empty
-     * when the manifest was unreadable.
+     * when the manifest was unreadable and branch cleanup was not attempted.
      */
     branch_outcomes: Record<string, Delete_Branch_Outcome>;
     /**
@@ -376,6 +379,8 @@ export interface Destroy_Sandbox_Result {
      * the user can recover via subsequent operations.
      */
     archive_removed: boolean;
+    /** True when `read_manifest` failed and destroy fell back to best-effort cleanup. */
+    manifest_unreadable: boolean;
 }
 
 /**
@@ -408,16 +413,21 @@ export async function destroy_sandbox(
     // Capture the manifest before we touch anything — branch cleanup needs
     // `manifest_repositories(manifest)` to know which repositories to iterate.
     let manifest: Sandbox_Manifest | null = null;
+    let manifest_unreadable = false;
     try {
         manifest = read_manifest(sandbox_directory);
+        stop_host_proxy(sandbox_id);
         stop_and_remove_container_best_effort(manifest.container_name);
     } catch (_unreadable_manifest) {
+        manifest_unreadable = true;
         // Manifest unreadable, try with derived name.
+        stop_host_proxy(sandbox_id);
         stop_and_remove_container_best_effort(name);
     }
 
     let branch_outcomes: Record<string, Delete_Branch_Outcome> = {};
     let branch_cleanup_threw = false;
+    let discovered_repository_roots: string[] = [];
     if (manifest !== null) {
         try {
             branch_outcomes = await delete_patchlab_branch(manifest, sandbox_id, {
@@ -437,20 +447,60 @@ export async function destroy_sandbox(
                 + `${error instanceof Error ? error.message : String(error)}`
             );
         }
+    } else {
+        discovered_repository_roots = try_read_manifest_repository_roots(sandbox_directory);
+        if (!options?.force) {
+            logger().warn(
+                `Manifest for ${sandbox_id} at ${sandbox_directory} is unreadable; `
+                + `leaving the archive and patchlab branches intact. `
+                + `Repair the manifest or re-run \`patchlab destroy ${sandbox_id} --force\` `
+                + `to force-delete branches discovered from the corrupt file.`
+            );
+        } else if (discovered_repository_roots.length === 0) {
+            logger().warn(
+                `Manifest for ${sandbox_id} at ${sandbox_directory} is unreadable and no `
+                + `repository roots could be recovered from it; leaving the archive and any `
+                + `patchlab branches intact. Repair the manifest or delete branches manually.`
+            );
+        } else {
+            try {
+                branch_outcomes = await delete_patchlab_branch_in_repositories(
+                    sandbox_id,
+                    discovered_repository_roots,
+                    {
+                        force: options.force,
+                        confirm: options?.confirm,
+                    },
+                );
+            } catch (error) {
+                branch_cleanup_threw = true;
+                logger().warn(
+                    `Branch cleanup threw while destroying ${sandbox_id} from recovered repository roots; `
+                    + `per-repository outcomes are unknown, so the archive directory is being kept. `
+                    + `${error instanceof Error ? error.message : String(error)}`
+                );
+            }
+        }
     }
 
     // Archive removal is conditional on every repository's outcome being
     // 'deleted', 'missing', or 'error'. Any 'skipped' outcome — or a cleanup
     // that threw before outcomes could be determined — blocks removal so the
-    // user can recover. When the manifest was unreadable, branch_outcomes is
-    // empty and the rule is trivially satisfied (nothing to gate on); we remove
-    // the archive as the legacy path did.
+    // user can recover. When the manifest was unreadable, archive removal is
+    // also blocked unless `--force` supplied repository roots to clean up.
     const any_skipped = Object.values(branch_outcomes).includes('skipped');
+    const may_remove_archive_after_unreadable_manifest =
+        !manifest_unreadable || (options?.force === true && discovered_repository_roots.length > 0);
     let archive_removed = false;
-    if (!branch_cleanup_threw && !any_skipped && fs.existsSync(sandbox_directory)) {
+    if (
+        may_remove_archive_after_unreadable_manifest
+        && !branch_cleanup_threw
+        && !any_skipped
+        && fs.existsSync(sandbox_directory)
+    ) {
         fs.rmSync(sandbox_directory, { recursive: true, force: true });
         archive_removed = true;
     }
 
-    return { branch_outcomes, archive_removed };
+    return { branch_outcomes, archive_removed, manifest_unreadable };
 }

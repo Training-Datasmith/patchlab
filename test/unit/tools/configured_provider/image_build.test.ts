@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-vi.mock('../../../../src/podman.js', () => ({
+vi.mock('../../../../src/container_runtime.js', () => ({
     copy_to_container: vi.fn(),
 }));
 
@@ -13,7 +13,7 @@ import {
     inject_authentication_environment_variables,
     inject_authentication_file_copy,
 } from '../../../../src/tools/configured_provider/image_build.js';
-import { copy_to_container } from '../../../../src/podman.js';
+import { copy_to_container } from '../../../../src/container_runtime.js';
 import { ConsoleLogger, set_logger } from '../../../../src/logger.js';
 import { RecordingLogger } from '../../../helpers/recording_logger.js';
 import type { Configured_Tool_Provider_Manifest } from '../../../../src/tools/configured_provider/types.js';

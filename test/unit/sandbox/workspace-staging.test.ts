@@ -10,10 +10,13 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { execSync } from 'node:child_process';
 
-vi.mock('../../../src/podman.js', () => ({
+vi.mock('../../../src/container_runtime.js', () => ({
     CONTAINER_WORKING_DIR: '/home/patchlab/workspace',
     copy_to_container: vi.fn(),
+    copy_into_workspace: vi.fn(),
     exec_container: vi.fn(),
+    fix_workspace_ownership_if_needed: vi.fn(),
+    runtime_host_tmpdir: vi.fn(() => os.tmpdir()),
 }));
 
 import {
@@ -27,7 +30,7 @@ import {
     overlay_multi_source_host_files,
     prepare_workspace,
 } from '../../../src/sandbox/workspace_staging.js';
-import { copy_to_container, exec_container } from '../../../src/podman.js';
+import { copy_to_container, exec_container } from '../../../src/container_runtime.js';
 import type { Source_Specification } from '../../../src/manifest.js';
 import type { Npm_Package_Requirement } from '../../../src/detect/index.js';
 import {

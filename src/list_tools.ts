@@ -2,6 +2,7 @@ import * as path from 'node:path';
 import {
     list_registrations,
     get_user_global_load_errors,
+    provider_supports_prompt_launch,
     type Provider_Source,
 } from './tools/index.js';
 import { format_warning, type Manifest_Parse_Error } from './tools/configured_provider/index.js';
@@ -71,8 +72,9 @@ export function run_list_tools(options?: Run_List_Tools_Options): void {
 
     for (const { name, provider, source } of list_registrations()) {
         const label = format_provider_source(source);
-        const annotation = source.kind === 'per-source' && unconfirmed ? ' [unconfirmed]' : '';
-        output_log(`${name}  (${provider.display_name})  [${label}]${annotation}`);
+        const unconfirmed_suffix = source.kind === 'per-source' && unconfirmed ? ' [unconfirmed]' : '';
+        const prompt_suffix = provider_supports_prompt_launch(provider) ? ' [-p]' : '';
+        output_log(`${name}  (${provider.display_name})  [${label}]${unconfirmed_suffix}${prompt_suffix}`);
     }
 
     for (const error of [...user_global_errors, ...per_source_errors]) {

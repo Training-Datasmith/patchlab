@@ -2,7 +2,7 @@
 // JSON output. The producer step (execFileSync('podman', ['images', ...])) is
 // mocked here so these tests are deterministic and never call real podman.
 // Integration coverage for the actual podman round-trip lives in
-// test/integration/sandbox-podman.test.ts (image listing functions describe).
+// test/integration/podman/sandbox-podman.test.ts (image listing functions describe).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
@@ -32,8 +32,8 @@ vi.mock('node:child_process', () => ({
     execFileSync: vi.fn(() => Buffer.from(MOCK_IMAGE_JSON)),
 }));
 
-vi.mock('../../src/podman.js', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('../../src/podman.js')>();
+vi.mock('../../src/container_runtime.js', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../src/container_runtime.js')>();
     return {
         ...actual,
         image_exists: vi.fn(() => true),
@@ -42,7 +42,7 @@ vi.mock('../../src/podman.js', async (importOriginal) => {
 
 import { list_images, get_default_image, has_any_compatible_image, validate_image, PATCHLAB_LABEL, PATCHLAB_TOOLS_LABEL, CAPABILITIES_LABEL } from '../../src/images.js';
 import * as images from '../../src/images.js';
-import { image_exists } from '../../src/podman.js';
+import { image_exists } from '../../src/container_runtime.js';
 
 const mock_image_exists = vi.mocked(image_exists);
 

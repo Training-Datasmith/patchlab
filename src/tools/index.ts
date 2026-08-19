@@ -1,6 +1,7 @@
 import * as path from 'node:path';
 import { register_provider, register_with_source, get_provider_source } from './provider.js';
 import { logger } from '../logger.js';
+import { create_opencode_provider, OPENCODE_TOOL_NAME } from '../opencode/index.js';
 import {
     Configured_Tool_Provider,
     type Configured_Tool_Provider_Manifest,
@@ -14,9 +15,8 @@ import {
     read_per_source_manifest_buffers,
 } from './configured_provider/index.js';
 
-// Built-in providers are registered here at module load when present.
-// Patchlab currently ships no built-in tool providers — tools come from
-// user-global or per-source YAML manifests (see documents/configuration-based-providers.md).
+// Built-in providers are registered here at module load.
+register_provider(create_opencode_provider());
 
 function is_registered_builtin(name: string): boolean {
     return get_provider_source(name)?.kind === 'built-in';
@@ -476,10 +476,47 @@ export {
     get_provider_source,
 } from './provider.js';
 export type { Provider_Source } from './provider.js';
-import type { Tool_Provider } from './types.js';
-export type { Authentication_Method, Authentication_Result, Image_Specification, Tool_Provider } from './types.js';
+import type { Launch_Context, Prompt_Passthrough_Capability, Tool_Provider } from './types.js';
+export type {
+    Authentication_Method,
+    Authentication_Result,
+    Host_Access_Plan,
+    Host_File_Copy,
+    Image_Specification,
+    Launch_Context,
+    Prepare_Host_Access_Context,
+    Prompt_Launch_Context,
+    Prompt_Passthrough_Capability,
+    Tool_Provider,
+} from './types.js';
+export { HOST_PATCHLAB_INTERNAL } from './types.js';
 export { Configured_Tool_Provider, format_warning } from './configured_provider/index.js';
 export type { Manifest_Parse_Error } from './configured_provider/index.js';
+
+export function provider_supports_prompt_launch(provider: Tool_Provider): boolean {
+    return provider.get_prompt_launch_command !== undefined;
+}
+
+export function provider_supports_prompt_passthrough(
+    provider: Tool_Provider,
+    capability: Prompt_Passthrough_Capability,
+): boolean {
+    const capabilities = provider.get_prompt_passthrough_capabilities?.();
+    return capabilities !== undefined && capabilities.includes(capability);
+}
+
+function assert_passthrough_inputs(provider: Tool_Provider, context?: Launch_Context): void {
+    const extra = context?.extra_argv;
+    if (extra !== undefined && extra.length > 0
+        && !provider_supports_prompt_passthrough(provider, 'passthrough')) {
+        throw new Error(`tool '${provider.name}' does not support --passthrough`);
+    }
+    const files = context?.files;
+    if (files !== undefined && files.length > 0
+        && !provider_supports_prompt_passthrough(provider, 'file')) {
+        throw new Error(`tool '${provider.name}' does not support --prompt-file`);
+    }
+}
 
 /**
  * Container path where patchlab stages source files inside any provider's image.
@@ -490,3 +527,41 @@ export type { Manifest_Parse_Error } from './configured_provider/index.js';
 export function compute_container_workspace_path(provider: Tool_Provider): string {
     return `${provider.image_specification.image_home}/workspace`;
 }
+
+/**
+ * Resolve the argv patchlab should exec inside the container. Without a prompt,
+ * returns `get_launch_command()`. With a prompt, requires `get_prompt_launch_command`.
+ */
+export function resolve_tool_launch_command(
+    provider: Tool_Provider,
+    prompt: string | undefined,
+    context?: Launch_Context,
+): string[] {
+    assert_passthrough_inputs(provider, context);
+    if (prompt === undefined) {
+        return provider.get_launch_command(context);
+    }
+    if (provider.get_prompt_launch_command === undefined) {
+        throw new Error(`tool '${provider.name}' does not support --prompt`);
+    }
+    return provider.get_prompt_launch_command(prompt, context);
+}
+
+export { resolve_create_tool_name, resolve_create_tool_provider, DEFAULT_BUILTIN_TOOL } from './default_tool.js';
+export type { Per_Source_Default_Tool_Resolution } from './default_tool.js';
+export {
+    verify_per_source_default_tool,
+    resolve_allow_untrusted_default_tool_from,
+    Default_Tool_Aborted_Error,
+    Default_Tool_Declined_Error,
+    Conflicting_Default_Tools_Error,
+} from './default_tool_trust.js';
+export {
+    read_default_tool_preference,
+    write_default_tool_preference,
+    default_tool_preference_path,
+    default_tool_preference_directory,
+} from './default_tool_preference.js';
+export { repository_realpath, repository_state_key } from './repository_state_key.js';
+export { is_provider_registered } from './provider.js';
+export { OPENCODE_TOOL_NAME } from '../opencode/index.js';

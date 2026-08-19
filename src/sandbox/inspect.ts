@@ -40,7 +40,7 @@ import {
     CONTAINER_WORKING_DIR,
     container_exists,
     container_running,
-} from '../podman.js';
+} from '../container_runtime.js';
 import {
     patchlab_branch_exists,
     patchlab_branch_name,

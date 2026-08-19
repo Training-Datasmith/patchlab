@@ -7,7 +7,7 @@ import * as os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { destroy_sandbox } from '../../src/sandbox/index.js';
 import { diff_sandbox } from '../../src/changes.js';
-import { exec_container } from '../../src/podman.js';
+import { exec_container } from '../../src/container_runtime.js';
 
 const GIT_TEST_ENVIRONMENT = {
     ...process.env,

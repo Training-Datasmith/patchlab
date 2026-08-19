@@ -1,5 +1,5 @@
 import { vi } from 'vitest';
-import type { Tool_State } from '../../src/podman.js';
+import type { Tool_State } from '../../src/container_runtime.js';
 
 /**
  * Shared mock state for the four-value `Tool_State` test surface
@@ -69,7 +69,7 @@ export function reset_tool_state_mock_state(
 }
 
 /**
- * Build the object returned by a `vi.mock('../../src/podman.js', ...)` factory.
+ * Build the object returned by a `vi.mock('../../src/container_runtime.js', ...)` factory.
  * Awaits `importOriginal()` to grab the real module, then overrides the nine
  * functions the tool-state surface needs (`create_container`,
  * `is_patchlab_compatible_image`, `get_image_tool_state`, `image_exists`,
@@ -82,7 +82,7 @@ export function reset_tool_state_mock_state(
  */
 export async function build_tool_state_podman_mock(
     state: Tool_State_Mock_State,
-    importOriginal: () => Promise<typeof import('../../src/podman.js')>,
+    importOriginal: () => Promise<typeof import('../../src/container_runtime.js')>,
 ): Promise<Record<string, unknown>> {
     const original = await importOriginal();
     return {

@@ -1,6 +1,6 @@
 import { read_manifest, resolve_manifest_tool } from './manifest.js';
 import { build_archive_path } from './archive.js';
-import { exec_container } from './podman.js';
+import { exec_container } from './container_runtime.js';
 import { get_provider, compute_container_workspace_path } from './tools/index.js';
 
 export type File_Change_Type = 'add' | 'modify' | 'delete';

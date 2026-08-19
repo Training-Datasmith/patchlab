@@ -13,14 +13,16 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-vi.mock('../../src/podman.js', () => ({
+vi.mock('../../src/container_runtime.js', () => ({
     CONTAINER_WORKING_DIR: '/home/patchlab/workspace',
     copy_to_container: vi.fn(),
     exec_container: vi.fn(),
+    fix_workspace_ownership_if_needed: vi.fn(),
+    runtime_host_tmpdir: vi.fn(() => os.tmpdir()),
 }));
 
 import { copy_multi_source_files } from '../../src/sandbox/workspace_staging.js';
-import { copy_to_container, exec_container } from '../../src/podman.js';
+import { copy_to_container, exec_container } from '../../src/container_runtime.js';
 import type { Source_Specification } from '../../src/manifest.js';
 import {
     install_recording_logger_hooks,

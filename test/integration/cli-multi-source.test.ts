@@ -20,6 +20,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { DEFAULT_TEST_TOOL, write_default_test_tool_manifest_to_home } from '../helpers/stub_tool_provider.js';
+import { cli_subprocess_env } from '../helpers/home_directory.js';
 
 const REPOSITORY_ROOT = path.resolve(__dirname, '..', '..');
 const CLI_PATH = path.join(REPOSITORY_ROOT, 'dist', 'cli.js');
@@ -45,11 +46,7 @@ function run_cli_create(
     command_arguments: string[],
 ): Spawn_Result {
     const result = spawnSync(process.execPath, [CLI_PATH, 'create', ...CLI_CREATE_TOOL_FLAGS, ...command_arguments], {
-        env: {
-            ...process.env,
-            HOME: home_directory,
-            USERPROFILE: home_directory,
-        },
+        env: cli_subprocess_env(home_directory),
         encoding: 'utf-8',
         timeout: 60_000,
     });
