@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { create_sandbox } from '../../../src/sandbox/index.js';
-import { install_isolated_home_hooks } from '../../helpers/home_directory.js';
+import { install_isolated_patchlab_home_hooks } from '../../helpers/home_directory.js';
 import { loaded_configuration_with_resource_limits } from '../../../src/configuration.js';
 import { DEFAULT_TEST_TOOL, register_default_test_tool } from '../../helpers/stub_tool_provider.js';
 
@@ -95,11 +95,11 @@ vi.mock('../../../src/tools/default_tool_trust.js', async (importOriginal) => {
 });
 
 describe('create_sandbox default tool resolution', () => {
-    install_isolated_home_hooks('patchlab-create-default-tool-');
+    install_isolated_patchlab_home_hooks('patchlab-create-default-tool-');
     let source_directory: string;
 
     beforeEach(() => {
-        source_directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-create-default-tool-')));
+        source_directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-create-default-tool-src-')));
         mock_verify_per_source_default_tool.mockReset();
         mock_verify_per_source_default_tool.mockResolvedValue({ override: null });
         register_default_test_tool();
@@ -107,6 +107,7 @@ describe('create_sandbox default tool resolution', () => {
 
     afterEach(() => {
         vi.restoreAllMocks();
+        fs.rmSync(source_directory, { recursive: true, force: true });
     });
 
     it('throws when options.tool is empty', async () => {

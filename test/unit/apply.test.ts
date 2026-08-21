@@ -17,11 +17,13 @@ import {
 } from '../../src/archive.js';
 import { create_manifest, read_manifest, write_manifest } from '../../src/manifest.js';
 import {
+    configure_repository_autocrlf,
+    expect_working_tree_file,
     GIT_TEST_ENVIRONMENT,
-    initialize_repository_with_initial_commit,
     read_default_branch,
     resolve_revision,
     run_git_silently,
+    type Repository_Autocrlf_Setting,
 } from '../helpers/git_repository.js';
 import { install_isolated_home_hooks } from '../helpers/home_directory.js';
 
@@ -39,9 +41,31 @@ function git(repository: string, args: string[]): string {
     });
 }
 
-function init_test_repository(repository: string): string {
-    initialize_repository_with_initial_commit(repository);
-    return read_default_branch(repository);
+const AUTOCRLF_SETTINGS: Repository_Autocrlf_Setting[] = ['false', 'true'];
+
+function init_repository_with_autocrlf(
+    directory: string,
+    autocrlf: Repository_Autocrlf_Setting,
+): string {
+    run_git_silently(directory, ['init']);
+    configure_repository_autocrlf(directory, autocrlf);
+    fs.writeFileSync(path.join(directory, 'README.md'), 'initial\n');
+    run_git_silently(directory, ['add', '-A']);
+    run_git_silently(directory, ['commit', '-m', 'initial']);
+    return read_default_branch(directory);
+}
+
+function init_apply_target_directory(autocrlf: Repository_Autocrlf_Setting): string {
+    const target_directory = fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-apply-target-')),
+    );
+    fs.writeFileSync(path.join(target_directory, 'a.txt'), 'line 1\nline 2\n');
+    fs.writeFileSync(path.join(target_directory, 'b.txt'), 'hello\n');
+    run_git_silently(target_directory, ['init']);
+    configure_repository_autocrlf(target_directory, autocrlf);
+    run_git_silently(target_directory, ['add', '-A']);
+    run_git_silently(target_directory, ['commit', '-m', 'init']);
+    return target_directory;
 }
 
 function write_session(
@@ -167,13 +191,13 @@ function setup_patchlab(
     };
 }
 
-describe('apply_patchlab_branch', () => {
+describe.each(AUTOCRLF_SETTINGS)('apply_patchlab_branch (core.autocrlf=%s)', (autocrlf) => {
     install_isolated_home_hooks('patchlab-apply-home-');
     let repository: string;
 
     beforeEach(() => {
         repository = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-apply-repo-')));
-        init_test_repository(repository);
+        init_repository_with_autocrlf(repository, autocrlf);
     });
 
     afterEach(() => {
@@ -196,8 +220,8 @@ describe('apply_patchlab_branch', () => {
         expect(result.applied.map((item) => item.commit_sha)).toEqual([sha_one, sha_two]);
         expect(result.conflict).toBeUndefined();
 
-        expect(fs.readFileSync(path.join(repository, 'a.txt'), 'utf-8')).toBe('first\n');
-        expect(fs.readFileSync(path.join(repository, 'b.txt'), 'utf-8')).toBe('second\n');
+        expect_working_tree_file(repository, 'a.txt', 'first\n');
+        expect_working_tree_file(repository, 'b.txt', 'second\n');
     });
 
     it('--session N cherry-picks only that session via metadata SHA (4.2)', () => {
@@ -211,7 +235,7 @@ describe('apply_patchlab_branch', () => {
             { session_number: 2, commit_sha: sha_two },
         ]);
         expect(fs.existsSync(path.join(repository, 'a.txt'))).toBe(false);
-        expect(fs.readFileSync(path.join(repository, 'b.txt'), 'utf-8')).toBe('second\n');
+        expect_working_tree_file(repository, 'b.txt', 'second\n');
     });
 
     it('--merge produces a merge commit (4.3)', () => {
@@ -245,8 +269,8 @@ describe('apply_patchlab_branch', () => {
         expect(parents.length).toBe(2);
         expect(parents[1]).toBe(head_before);
 
-        expect(fs.readFileSync(path.join(repository, 'a.txt'), 'utf-8')).toBe('first\n');
-        expect(fs.readFileSync(path.join(repository, 'b.txt'), 'utf-8')).toBe('second\n');
+        expect_working_tree_file(repository, 'a.txt', 'first\n');
+        expect_working_tree_file(repository, 'b.txt', 'second\n');
     });
 
     it('skips already-applied sessions detected via git cherry (4.5)', () => {
@@ -284,8 +308,8 @@ describe('apply_patchlab_branch', () => {
         const applied_sessions = result.applied.map((item) => item.session_number);
         expect(applied_sessions).toContain(null);  // baseline appears as null session_number
         expect(applied_sessions).toContain(1);
-        expect(fs.readFileSync(path.join(repository, 'wip.txt'), 'utf-8')).toBe('work in progress\n');
-        expect(fs.readFileSync(path.join(repository, 'a.txt'), 'utf-8')).toBe('first\n');
+        expect_working_tree_file(repository, 'wip.txt', 'work in progress\n');
+        expect_working_tree_file(repository, 'a.txt', 'first\n');
     });
 
     it('skips sessions whose commit_sha is null (4.7)', () => {
@@ -409,7 +433,7 @@ describe('apply_patchlab_branch', () => {
         expect(parents[1]).toBe(head_before);
 
         // Session content is on the current branch — but wip.txt (baseline content) is NOT.
-        expect(fs.readFileSync(path.join(repository, 'a.txt'), 'utf-8')).toBe('first\n');
+        expect_working_tree_file(repository, 'a.txt', 'first\n');
         expect(fs.existsSync(path.join(repository, 'wip.txt'))).toBe(false);
     });
 
@@ -428,8 +452,8 @@ describe('apply_patchlab_branch', () => {
         expect(result.merge_commit_sha).toBeDefined();
 
         // Both baseline content (wip.txt) and session content (a.txt) end up on the branch.
-        expect(fs.readFileSync(path.join(repository, 'a.txt'), 'utf-8')).toBe('first\n');
-        expect(fs.readFileSync(path.join(repository, 'wip.txt'), 'utf-8')).toBe('work in progress\n');
+        expect_working_tree_file(repository, 'a.txt', 'first\n');
+        expect_working_tree_file(repository, 'wip.txt', 'work in progress\n');
     });
 
     it('throws when the patchlab branch does not exist in the repository', () => {
@@ -469,8 +493,7 @@ describe('apply_patchlab_branch', () => {
             { session_number: 1, commit_sha: session_sha },
         ]);
         expect(result.conflict).toBeUndefined();
-        expect(fs.readFileSync(path.join(repository, 'detached.txt'), 'utf-8'))
-            .toBe('detached body\n');
+        expect_working_tree_file(repository, 'detached.txt', 'detached body\n');
     });
 });
 
@@ -483,17 +506,11 @@ describe('apply_patchlab_branch', () => {
 // overhead (the assertion subject is host-side `git apply`), they were moved
 // here with hand-crafted unified-diff fixtures matching the shape
 // `generate_patch` would emit byte-for-byte.
-describe('apply_patch / apply_patch_file', () => {
+describe.each(AUTOCRLF_SETTINGS)('apply_patch / apply_patch_file (core.autocrlf=%s)', (autocrlf) => {
     let target_directory: string;
 
     beforeEach(() => {
-        target_directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-apply-target-')));
-        fs.writeFileSync(path.join(target_directory, 'a.txt'), 'line 1\nline 2\n');
-        fs.writeFileSync(path.join(target_directory, 'b.txt'), 'hello\n');
-        // Initialize as a git repo so `git apply` has a proper context.
-        run_git_silently(target_directory, ['init']);
-        run_git_silently(target_directory, ['add', '-A']);
-        run_git_silently(target_directory, ['commit', '-m', 'init']);
+        target_directory = init_apply_target_directory(autocrlf);
     });
 
     afterEach(() => {
@@ -516,16 +533,15 @@ describe('apply_patch / apply_patch_file', () => {
             '+line 2 modified',
             '',
         ].join('\n');
+        const b_before = fs.readFileSync(path.join(target_directory, 'b.txt'), 'utf-8');
 
         const result = apply_patch(target_directory, patch);
         expect(result.success).toBe(true);
         expect(result.failed).toEqual([]);
         expect(result.applied.map((entry) => entry.file_path)).toContain('a.txt');
-        expect(fs.readFileSync(path.join(target_directory, 'a.txt'), 'utf-8')).toBe(
-            'line 1\nline 2 modified\n'
-        );
+        expect_working_tree_file(target_directory, 'a.txt', 'line 1\nline 2 modified\n');
         // Untouched file survives unchanged.
-        expect(fs.readFileSync(path.join(target_directory, 'b.txt'), 'utf-8')).toBe('hello\n');
+        expect(fs.readFileSync(path.join(target_directory, 'b.txt'), 'utf-8')).toBe(b_before);
     });
 
     it('applies a patch that adds a new file', () => {
@@ -538,17 +554,17 @@ describe('apply_patch / apply_patch_file', () => {
             '+brand new',
             '',
         ].join('\n');
+        const a_before = fs.readFileSync(path.join(target_directory, 'a.txt'), 'utf-8');
+        const b_before = fs.readFileSync(path.join(target_directory, 'b.txt'), 'utf-8');
 
         const result = apply_patch(target_directory, patch);
         expect(result.success).toBe(true);
         expect(result.failed).toEqual([]);
         expect(result.applied.map((entry) => entry.file_path)).toContain('new.txt');
-        expect(fs.readFileSync(path.join(target_directory, 'new.txt'), 'utf-8')).toBe(
-            'brand new\n'
-        );
+        expect_working_tree_file(target_directory, 'new.txt', 'brand new\n');
         // Pre-existing files survive unchanged.
-        expect(fs.readFileSync(path.join(target_directory, 'a.txt'), 'utf-8')).toBe('line 1\nline 2\n');
-        expect(fs.readFileSync(path.join(target_directory, 'b.txt'), 'utf-8')).toBe('hello\n');
+        expect(fs.readFileSync(path.join(target_directory, 'a.txt'), 'utf-8')).toBe(a_before);
+        expect(fs.readFileSync(path.join(target_directory, 'b.txt'), 'utf-8')).toBe(b_before);
     });
 
     it('applies a patch that deletes a file', () => {
@@ -561,6 +577,7 @@ describe('apply_patch / apply_patch_file', () => {
             '-hello',
             '',
         ].join('\n');
+        const a_before = fs.readFileSync(path.join(target_directory, 'a.txt'), 'utf-8');
 
         const result = apply_patch(target_directory, patch);
         expect(result.success).toBe(true);
@@ -568,7 +585,7 @@ describe('apply_patch / apply_patch_file', () => {
         expect(result.applied.map((entry) => entry.file_path)).toContain('b.txt');
         expect(fs.existsSync(path.join(target_directory, 'b.txt'))).toBe(false);
         // Untouched file survives unchanged.
-        expect(fs.readFileSync(path.join(target_directory, 'a.txt'), 'utf-8')).toBe('line 1\nline 2\n');
+        expect(fs.readFileSync(path.join(target_directory, 'a.txt'), 'utf-8')).toBe(a_before);
     });
 
     it('dry-run does not modify files', () => {
@@ -582,16 +599,16 @@ describe('apply_patch / apply_patch_file', () => {
             '+changed',
             '',
         ].join('\n');
+        const a_before = fs.readFileSync(path.join(target_directory, 'a.txt'), 'utf-8');
+        const b_before = fs.readFileSync(path.join(target_directory, 'b.txt'), 'utf-8');
 
         const result = apply_patch(target_directory, patch, { dry_run: true });
         expect(result.success).toBe(true);
         expect(result.failed).toEqual([]);
         // Every file in the target survives unchanged — broader than just
         // asserting a.txt, since a dry-run regression could partially apply.
-        expect(fs.readFileSync(path.join(target_directory, 'a.txt'), 'utf-8')).toBe(
-            'line 1\nline 2\n'
-        );
-        expect(fs.readFileSync(path.join(target_directory, 'b.txt'), 'utf-8')).toBe('hello\n');
+        expect(fs.readFileSync(path.join(target_directory, 'a.txt'), 'utf-8')).toBe(a_before);
+        expect(fs.readFileSync(path.join(target_directory, 'b.txt'), 'utf-8')).toBe(b_before);
     });
 
     it('applies from a patch file', () => {
@@ -605,6 +622,7 @@ describe('apply_patch / apply_patch_file', () => {
             '+patched from file',
             '',
         ].join('\n');
+        const b_before = fs.readFileSync(path.join(target_directory, 'b.txt'), 'utf-8');
 
         const patch_path = path.join(os.tmpdir(), `patchlab-test-apply-${Date.now()}.patch`);
         try {
@@ -613,10 +631,8 @@ describe('apply_patch / apply_patch_file', () => {
             expect(result.success).toBe(true);
             expect(result.failed).toEqual([]);
             expect(result.applied.map((entry) => entry.file_path)).toContain('a.txt');
-            expect(fs.readFileSync(path.join(target_directory, 'a.txt'), 'utf-8')).toBe(
-                'patched from file\n'
-            );
-            expect(fs.readFileSync(path.join(target_directory, 'b.txt'), 'utf-8')).toBe('hello\n');
+            expect_working_tree_file(target_directory, 'a.txt', 'patched from file\n');
+            expect(fs.readFileSync(path.join(target_directory, 'b.txt'), 'utf-8')).toBe(b_before);
         } finally {
             fs.unlinkSync(patch_path);
         }
@@ -644,6 +660,7 @@ describe('apply_patch / apply_patch_file', () => {
                 'completely rewritten\nno matching context\n',
             );
             run_git_silently(divergent_directory, ['init']);
+            configure_repository_autocrlf(divergent_directory, autocrlf);
             run_git_silently(divergent_directory, ['add', '-A']);
             run_git_silently(divergent_directory, ['commit', '-m', 'init']);
 
@@ -696,8 +713,7 @@ describe('apply_patch / apply_patch_file', () => {
             // that wasn't actually written — or `result.failed` named a file
             // that WAS written — would let the user act on a wrong picture of
             // disk state.
-            expect(fs.readFileSync(path.join(divergent_directory, 'stable.txt'), 'utf-8'))
-                .toBe('sandbox stable\n');
+            expect_working_tree_file(divergent_directory, 'stable.txt', 'sandbox stable\n');
             expect(fs.readFileSync(path.join(divergent_directory, 'diverged.txt'), 'utf-8'))
                 .toBe(diverged_before);
         } finally {

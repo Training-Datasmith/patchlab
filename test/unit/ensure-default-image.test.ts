@@ -67,6 +67,10 @@ describe('ensure_default_image', () => {
             path.join(project_directory, 'composer.json'),
             JSON.stringify({ require: { php: '^8.1' } }),
         );
+        fs.writeFileSync(
+            path.join(project_directory, 'composer.lock'),
+            JSON.stringify({ platform: { php: '8.4.0' } }),
+        );
         mock_get_default_image.mockReturnValue(null);
         mock_build_image.mockResolvedValue('patchlab/php-8.4-cli:latest');
 

@@ -35,10 +35,22 @@ export {
 export type { Container_Runtime, Container_Runtime_Kind, Runtime_Exec_Options } from './types.js';
 export { runtime_host_tmpdir, is_lima_mounted_host_path } from './host_paths.js';
 
+function fix_copied_workspace_ownership(name: string, working_directory: string): void {
+    const user = container_home_user(working_directory);
+    if (!user) {
+        return;
+    }
+
+    exec_container(name, ['chown', '-R', `${user}:${user}`, working_directory], { user: 'root' });
+}
+
 export function fix_workspace_ownership_if_needed(name: string, working_directory: string): void {
     if (get_container_runtime().kind === 'nerdctl') {
         nerdctl_fix_workspace_ownership(name, working_directory);
+        return;
     }
+
+    fix_copied_workspace_ownership(name, working_directory);
 }
 
 export function copy_into_workspace(
@@ -788,10 +800,14 @@ function nerdctl_commit_with_labels(
         for (const [key, value] of Object.entries(labels)) {
             dockerfile_lines.push(`LABEL ${key}=${JSON.stringify(value)}`);
         }
-        exec_runtime(['build', '-t', image_tag, '-f', '-', '/tmp'], {
-            input: `${dockerfile_lines.join('\n')}\n`,
-            stdio: ['pipe', 'pipe', 'pipe'],
-        });
+        const build_context = fs.mkdtempSync(path.join(runtime_host_tmpdir(), 'patchlab-commit-build-'));
+        try {
+            const dockerfile_path = path.join(build_context, 'Dockerfile');
+            fs.writeFileSync(dockerfile_path, `${dockerfile_lines.join('\n')}\n`, 'utf-8');
+            exec_runtime(['build', '-t', image_tag, '-f', dockerfile_path, build_context], { stdio: 'pipe' });
+        } finally {
+            fs.rmSync(build_context, { recursive: true, force: true });
+        }
     } finally {
         try {
             exec_runtime(['rmi', '-f', staging_tag], { stdio: 'pipe' });

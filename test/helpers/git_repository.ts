@@ -4,8 +4,12 @@
 // re-implement the four-line incantation with their own GIT_ENV constant.
 
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { expect } from 'vitest';
+
+export type Repository_Autocrlf_Setting = 'true' | 'false';
 
 /**
  * Git identity for test commits. Spreading `process.env` first lets the rest
@@ -60,6 +64,87 @@ export function read_default_branch(directory: string): string {
         env: GIT_TEST_ENVIRONMENT,
         encoding: 'utf-8',
     }).trim();
+}
+
+/** Set the repository-local line-ending policy used by host-side git commands. */
+export function configure_repository_autocrlf(
+    directory: string,
+    autocrlf: Repository_Autocrlf_Setting,
+): void {
+    run_git_silently(directory, ['config', 'core.autocrlf', autocrlf]);
+    if (autocrlf === 'false') {
+        run_git_silently(directory, ['config', 'core.eol', 'lf']);
+    }
+}
+
+/**
+ * Probe how git materializes an LF-normalized blob in the working tree under
+ * the repository's current local `core.autocrlf`, via checkout-index.
+ */
+export function probe_working_tree_text(
+    directory: string,
+    lf_content: string,
+): string {
+    const probe_name = `.patchlab-autocrlf-probe-${process.pid}-${Date.now()}.txt`;
+    const blob_sha = execFileSync('git', ['hash-object', '-w', '--stdin'], {
+        cwd: directory,
+        env: GIT_TEST_ENVIRONMENT,
+        input: lf_content,
+        encoding: 'utf-8',
+    }).trim();
+
+    const temporary_index = path.join(
+        os.tmpdir(),
+        `patchlab-autocrlf-probe-${process.pid}-${Date.now()}.idx`,
+    );
+    const probe_path = path.join(directory, probe_name);
+
+    try {
+        execFileSync(
+            'git',
+            ['update-index', '--add', '--cacheinfo', `100644,${blob_sha},${probe_name}`],
+            {
+                cwd: directory,
+                env: { ...GIT_TEST_ENVIRONMENT, GIT_INDEX_FILE: temporary_index },
+            },
+        );
+        execFileSync('git', ['checkout-index', '-f', '--', probe_name], {
+            cwd: directory,
+            env: { ...GIT_TEST_ENVIRONMENT, GIT_INDEX_FILE: temporary_index },
+        });
+        return fs.readFileSync(probe_path, 'utf-8');
+    } finally {
+        try {
+            fs.unlinkSync(probe_path);
+        } catch {
+            /* probe file already removed */
+        }
+        try {
+            fs.unlinkSync(temporary_index);
+        } catch {
+            /* temp index already removed */
+        }
+    }
+}
+
+/** Initialize an empty repository with a local `core.autocrlf` policy. */
+export function init_git_repository(
+    directory: string,
+    autocrlf: Repository_Autocrlf_Setting,
+): void {
+    run_git_silently(directory, ['init']);
+    configure_repository_autocrlf(directory, autocrlf);
+}
+
+/** Assert a git-touched working-tree file matches the repo's line-ending policy. */
+export function expect_working_tree_file(
+    directory: string,
+    file_path: string,
+    lf_content: string,
+): void {
+    expect(fs.readFileSync(path.join(directory, file_path), 'utf-8')).toBe(
+        probe_working_tree_text(directory, lf_content),
+    );
 }
 
 /**

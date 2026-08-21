@@ -158,7 +158,26 @@ jobs:
       # surfaces here rather than as a cryptic test error.
       - name: Verify podman runtime
         run: podman --version
-      - run: npx vitest run --project integration --project integration-podman --shard=${{ matrix.shard }}/4
+      - name: Run integration tests
+        run: |
+          SOCKET_PATH="$(podman info --format '{{.Host.RemoteSocket.Path}}' | sed 's|^unix://||')"
+          mkdir -p "$(dirname "$SOCKET_PATH")"
+          if [ ! -S "$SOCKET_PATH" ]; then
+            podman system service --time=0 "unix://${SOCKET_PATH}" &
+            SERVICE_PID=$!
+            for _ in $(seq 1 50); do
+              if [ -S "$SOCKET_PATH" ]; then
+                break
+              fi
+              sleep 0.2
+            done
+            if [ ! -S "$SOCKET_PATH" ]; then
+              echo "Podman API socket did not become ready at ${SOCKET_PATH}" >&2
+              kill "$SERVICE_PID" 2>/dev/null || true
+              exit 1
+            fi
+          fi
+          npx vitest run --project integration --project integration-podman --shard=${{ matrix.shard }}/4
         env:
           PATCHLAB_CONTAINER_RUNTIME: podman
           PATCHLAB_HOME: ${{ runner.temp }}/patchlab-integration-home
@@ -192,7 +211,10 @@ jobs:
           node-version: 24
           cache: npm
       - name: Install Lima and start default VM
+        env:
+          HOMEBREW_NO_REQUIRE_TAP_TRUST: 1
         run: |
+          brew untap aws/tap 2>/dev/null || true
           brew install lima
           limactl start --tty=false default || limactl start --tty=false
       - name: Verify nerdctl runtime

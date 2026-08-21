@@ -13,6 +13,11 @@ import { generate_patch } from '../../src/patches.js';
 import { apply_patch } from '../../src/apply.js';
 import { exec_container } from '../../src/container_runtime.js';
 import { assert_present } from '../helpers/assert_present.js';
+import {
+    expect_working_tree_file,
+    GIT_TEST_ENVIRONMENT,
+    init_git_repository,
+} from '../helpers/git_repository.js';
 
 // NOTE: Do not remove shared images (patchlab/node-22-slim:*) in afterAll —
 // other test files and the sandbox itself may depend on them.
@@ -31,11 +36,10 @@ describe('full round-trip (API)', () => {
         fs.writeFileSync(path.join(source_directory, 'lib', 'utils.ts'), 'export function add(a: number, b: number) { return a + b; }\n');
 
         // Init source as a git repo with clean working tree so create_sandbox accepts it
-        execFileSync('git', ['init'], { cwd: source_directory, stdio: 'pipe' });
+        init_git_repository(source_directory, 'false');
         execFileSync('git', ['add', '-A'], { cwd: source_directory, stdio: 'pipe' });
         execFileSync('git', ['commit', '-m', 'init'], {
-            cwd: source_directory, stdio: 'pipe',
-            env: { ...process.env, GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 'test@test', GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 'test@test' },
+            cwd: source_directory, stdio: 'pipe', env: GIT_TEST_ENVIRONMENT,
         });
 
         const manifest = await create_sandbox_from_directory(source_directory, { no_install: true });
@@ -69,14 +73,10 @@ describe('full round-trip (API)', () => {
         expect(result.success).toBe(true);
 
         // Verify source matches expectations
-        expect(fs.readFileSync(path.join(source_directory, 'index.ts'), 'utf-8')).toBe(
-            'export const version = "2.0";\n'
-        );
+        expect_working_tree_file(source_directory, 'index.ts', 'export const version = "2.0";\n');
         const utils = fs.readFileSync(path.join(source_directory, 'lib', 'utils.ts'), 'utf-8');
         expect(utils).toContain('sub(a: number, b: number)');
-        expect(fs.readFileSync(path.join(source_directory, 'README.md'), 'utf-8')).toBe(
-            '# README\n'
-        );
+        expect_working_tree_file(source_directory, 'README.md', '# README\n');
     });
 
     it('round-trip with file deletion', () => {
@@ -131,9 +131,11 @@ describe('CLI round-trip', () => {
         fs.writeFileSync(path.join(source_directory, 'app.js'), "console.log('hello');\n");
 
         // Init as git repo for apply to work
-        execFileSync('git', ['init'], { cwd: source_directory, stdio: 'pipe' });
+        init_git_repository(source_directory, 'false');
         execFileSync('git', ['add', '-A'], { cwd: source_directory, stdio: 'pipe' });
-        execFileSync('git', ['commit', '-m', 'init'], { cwd: source_directory, stdio: 'pipe' });
+        execFileSync('git', ['commit', '-m', 'init'], {
+            cwd: source_directory, stdio: 'pipe', env: GIT_TEST_ENVIRONMENT,
+        });
     });
 
     afterEach(() => {
@@ -178,8 +180,10 @@ describe('CLI round-trip', () => {
             execFileSync('git', ['apply', patch_path], { cwd: source_directory, stdio: 'pipe' });
 
             // Verify file changed
-            expect(fs.readFileSync(path.join(source_directory, 'app.js'), 'utf-8').trim()).toBe(
-                "console.log('goodbye');"
+            expect_working_tree_file(
+                source_directory,
+                'app.js',
+                "console.log('goodbye');\n",
             );
         } finally {
             try {
@@ -207,7 +211,7 @@ describe('edge cases', () => {
 
     beforeEach(() => {
         source_directory = fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-edge-'));
-        execFileSync('git', ['init'], { cwd: source_directory, stdio: 'pipe' });
+        init_git_repository(source_directory, 'false');
     });
 
     afterEach(async () => {
@@ -308,12 +312,11 @@ describe('container isolation', () => {
 
     beforeEach(async () => {
         source_directory = fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-iso-'));
-        execFileSync('git', ['init'], { cwd: source_directory, stdio: 'pipe' });
+        init_git_repository(source_directory, 'false');
         fs.writeFileSync(path.join(source_directory, 'original.txt'), 'do not change\n');
         execFileSync('git', ['add', '-A'], { cwd: source_directory, stdio: 'pipe' });
         execFileSync('git', ['commit', '-m', 'init'], {
-            cwd: source_directory, stdio: 'pipe',
-            env: { ...process.env, GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 'test@test', GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 'test@test' },
+            cwd: source_directory, stdio: 'pipe', env: GIT_TEST_ENVIRONMENT,
         });
 
         const manifest = await create_sandbox_from_directory(source_directory, { no_install: true });
@@ -349,7 +352,7 @@ describe('container isolation', () => {
         expect(result.success).toBe(true);
 
         // After apply — host updated
-        expect(fs.readFileSync(path.join(source_directory, 'original.txt'), 'utf-8')).toBe('updated\n');
+        expect_working_tree_file(source_directory, 'original.txt', 'updated\n');
     });
 });
 
@@ -373,11 +376,10 @@ describe('code generator workflow', () => {
         fs.writeFileSync(path.join(source_directory, 'template.txt'), 'PLACEHOLDER\n');
 
         // Init as git repo with clean working tree
-        execFileSync('git', ['init'], { cwd: source_directory, stdio: 'pipe' });
+        init_git_repository(source_directory, 'false');
         execFileSync('git', ['add', '-A'], { cwd: source_directory, stdio: 'pipe' });
         execFileSync('git', ['commit', '-m', 'init'], {
-            cwd: source_directory, stdio: 'pipe',
-            env: { ...process.env, GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 'test@test', GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 'test@test' },
+            cwd: source_directory, stdio: 'pipe', env: GIT_TEST_ENVIRONMENT,
         });
 
         const manifest = await create_sandbox_from_directory(source_directory, { no_install: true });
@@ -420,9 +422,7 @@ describe('code generator workflow', () => {
         // Apply and verify
         const result = apply_patch(source_directory, patch);
         expect(result.success).toBe(true);
-        expect(fs.readFileSync(path.join(source_directory, 'template.txt'), 'utf-8')).toBe(
-            'Generated Content\n'
-        );
+        expect_working_tree_file(source_directory, 'template.txt', 'Generated Content\n');
     });
 
     it('exec creates multiple files via script, extracts clean patch', () => {
@@ -452,9 +452,7 @@ describe('code generator workflow', () => {
         // Apply to source
         const result = apply_patch(source_directory, patch);
         expect(result.success).toBe(true);
-        expect(fs.readFileSync(path.join(source_directory, 'src', 'foo.ts'), 'utf-8').trim()).toBe(
-            'export class Foo {}'
-        );
+        expect_working_tree_file(source_directory, 'src/foo.ts', 'export class Foo {}\n');
     });
 
     it('exec runs a command that both modifies and creates files', () => {
@@ -472,7 +470,7 @@ describe('code generator workflow', () => {
         const patch = generate_patch(sandbox_id);
         const result = apply_patch(source_directory, patch);
         expect(result.success).toBe(true);
-        expect(fs.readFileSync(path.join(source_directory, 'template.txt'), 'utf-8')).toBe('done\n');
-        expect(fs.readFileSync(path.join(source_directory, 'output.txt'), 'utf-8')).toBe('log\n');
+        expect_working_tree_file(source_directory, 'template.txt', 'done\n');
+        expect_working_tree_file(source_directory, 'output.txt', 'log\n');
     });
 });

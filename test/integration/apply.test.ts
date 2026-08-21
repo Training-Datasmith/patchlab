@@ -9,8 +9,15 @@ import { destroy_sandbox } from '../../src/sandbox/index.js';
 import { generate_patch } from '../../src/patches.js';
 import { apply_patch } from '../../src/apply.js';
 import { exec_container } from '../../src/container_runtime.js';
+import {
+    GIT_TEST_ENVIRONMENT,
+    init_git_repository,
+    type Repository_Autocrlf_Setting,
+} from '../helpers/git_repository.js';
 
-describe('patch application', () => {
+const AUTOCRLF_SETTINGS: Repository_Autocrlf_Setting[] = ['false', 'true'];
+
+describe.each(AUTOCRLF_SETTINGS)('patch application (core.autocrlf=%s)', (autocrlf) => {
     let source_directory: string;
     let target_directory: string;
     let sandbox_id: string;
@@ -22,25 +29,26 @@ describe('patch application', () => {
         target_directory = fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-target-'));
 
         // Patchlab requires the source to be a git repo with a clean working tree
-        execFileSync('git', ['init'], { cwd: source_directory, stdio: 'pipe' });
+        init_git_repository(source_directory, autocrlf);
 
         fs.writeFileSync(path.join(source_directory, 'a.txt'), 'line 1\nline 2\n');
         fs.writeFileSync(path.join(source_directory, 'b.txt'), 'hello\n');
 
-        execFileSync('git', ['add', '-A'], { cwd: source_directory, stdio: 'pipe' });
+        execFileSync('git', ['add', '-A'], { cwd: source_directory, stdio: 'pipe', env: GIT_TEST_ENVIRONMENT });
         execFileSync('git', ['commit', '-m', 'init', '--allow-empty'], {
-            cwd: source_directory, stdio: 'pipe',
-            env: { ...process.env, GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 'test@test', GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 'test@test' },
+            cwd: source_directory, stdio: 'pipe', env: GIT_TEST_ENVIRONMENT,
         });
 
         // Target starts same as source
         fs.writeFileSync(path.join(target_directory, 'a.txt'), 'line 1\nline 2\n');
         fs.writeFileSync(path.join(target_directory, 'b.txt'), 'hello\n');
 
-        // Initialize target as a git repo (git apply works best in a git context)
-        execFileSync('git', ['init'], { cwd: target_directory, stdio: 'pipe' });
-        execFileSync('git', ['add', '-A'], { cwd: target_directory, stdio: 'pipe' });
-        execFileSync('git', ['commit', '-m', 'init'], { cwd: target_directory, stdio: 'pipe' });
+        // Initialize target as a git repo so `git apply` has a proper context.
+        init_git_repository(target_directory, autocrlf);
+        execFileSync('git', ['add', '-A'], { cwd: target_directory, stdio: 'pipe', env: GIT_TEST_ENVIRONMENT });
+        execFileSync('git', ['commit', '-m', 'init'], {
+            cwd: target_directory, stdio: 'pipe', env: GIT_TEST_ENVIRONMENT,
+        });
 
         const manifest = await create_sandbox_from_directory(source_directory, { no_install: true });
         sandbox_id = manifest.id;
@@ -76,6 +84,7 @@ describe('patch application', () => {
 
         // Modify target to diverge
         fs.writeFileSync(path.join(target_directory, 'a.txt'), 'completely different\n');
+        const b_before = fs.readFileSync(path.join(target_directory, 'b.txt'), 'utf-8');
 
         const result = apply_patch(target_directory, patch);
         expect(result.success).toBe(false);
@@ -88,8 +97,7 @@ describe('patch application', () => {
         // AND the file the patch did not touch.
         expect(fs.readFileSync(path.join(target_directory, 'a.txt'), 'utf-8'))
             .toBe('completely different\n');
-        expect(fs.readFileSync(path.join(target_directory, 'b.txt'), 'utf-8'))
-            .toBe('hello\n');
+        expect(fs.readFileSync(path.join(target_directory, 'b.txt'), 'utf-8')).toBe(b_before);
     });
 
 });

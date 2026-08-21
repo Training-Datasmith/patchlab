@@ -4,7 +4,7 @@
  * this file does NOT pre-supply volume_mounts or CONTAINER_HOST — the
  * production detection and approval pipeline must produce them.
  */
-import { describe, it, expect, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -17,6 +17,7 @@ import {
     create_integration_cleanup_registry,
     register_destroy_sandbox,
 } from '../helpers/integration_cleanup.js';
+import { ensure_host_podman_socket, HOST_PODMAN_SOCKET_SKIP_REASON } from '../helpers/podman_socket.js';
 
 const GIT_ENVIRONMENT = {
     ...process.env,
@@ -62,12 +63,25 @@ function build_podman_detecting_repository(): string {
 
 describe('detect → provisioning socket pipeline', () => {
     const cleanup = create_integration_cleanup_registry();
+    let host_podman_socket: string | null = null;
+
+    beforeAll(async () => {
+        const handle = await ensure_host_podman_socket();
+        if (handle) {
+            host_podman_socket = handle.path;
+            cleanup.register(() => handle.stop());
+        }
+    });
 
     afterAll(async () => {
         await cleanup.run_all();
     });
 
-    it('mounts the detected podman socket and sets CONTAINER_HOST when allow_socket_mount is true', async () => {
+    it('mounts the detected podman socket and sets CONTAINER_HOST when allow_socket_mount is true', async (context) => {
+        if (!host_podman_socket) {
+            context.skip(HOST_PODMAN_SOCKET_SKIP_REASON);
+        }
+
         const source_directory = build_podman_detecting_repository();
         cleanup.register(() => fs.rmSync(source_directory, { recursive: true, force: true }));
 

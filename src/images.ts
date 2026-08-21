@@ -395,13 +395,12 @@ export async function build_image(options?: Build_Image_Options): Promise<string
             extra_labels: options?.labels ?? [],
         });
 
+        const dockerfile_path = path.join(build_context, 'Dockerfile');
+        fs.writeFileSync(dockerfile_path, dockerfile, 'utf-8');
         execFileSync(
             get_runtime_binary(),
-            ['build', '-t', tag, '-f', '-', build_context],
-            {
-                input: dockerfile,
-                stdio: ['pipe', 'inherit', 'inherit'],
-            }
+            ['build', '-t', tag, '-f', dockerfile_path, build_context],
+            { stdio: 'inherit' },
         );
     } finally {
         fs.rmSync(build_context, { recursive: true, force: true });

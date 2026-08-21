@@ -25,9 +25,10 @@ const DUMMY_TAG = 'patchlab/validate-test-dummy:latest';
 function build_image_from_dockerfile(dockerfile: string, tag: string): void {
     const build_context = fs.mkdtempSync(path.join(runtime_host_tmpdir(), 'patchlab-validate-fixture-'));
     try {
-        exec_runtime_cli(['build', '-t', tag, '-f', '-', build_context], {
-            input: dockerfile,
-            stdio: ['pipe', 'pipe', 'pipe'],
+        const dockerfile_path = path.join(build_context, 'Dockerfile');
+        fs.writeFileSync(dockerfile_path, dockerfile, 'utf-8');
+        exec_runtime_cli(['build', '-t', tag, '-f', dockerfile_path, build_context], {
+            stdio: 'pipe',
         });
     } finally {
         fs.rmSync(build_context, { recursive: true, force: true });

@@ -9,6 +9,8 @@ if ! command -v brew >/dev/null 2>&1; then
 fi
 
 echo "==> Installing Lima (includes containerd + nerdctl in the VM)..."
+export HOMEBREW_NO_REQUIRE_TAP_TRUST=1
+brew untap aws/tap 2>/dev/null || true
 brew install lima
 
 echo "==> Starting default Lima instance (downloads VM image on first run)..."

@@ -4,12 +4,12 @@ import { DEFAULT_TEST_TOOL } from '../../helpers/stub_tool_provider.js';
 
 import { exec_container, image_exists, DEFAULT_IMAGE } from '../../../src/container_runtime.js';
 import { build_image, list_images, get_default_image, has_any_compatible_image, PATCHLAB_TEST_LABEL, remove_test_images } from '../../../src/images.js';
-import { resolve_podman_socket_path } from '../../../src/detect/index.js';
 import { get_image_capabilities, check_stale_image } from '../../../src/stale.js';
 import {
     create_integration_cleanup_registry,
     register_destroy_sandbox,
 } from '../../helpers/integration_cleanup.js';
+import { ensure_host_podman_socket, HOST_PODMAN_SOCKET_SKIP_REASON } from '../../helpers/podman_socket.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -45,8 +45,17 @@ describe('sandbox with podman socket access', () => {
     let source_directory: string;
     let sandbox_id: string;
     let container_name: string;
+    let host_podman_socket: string | null = null;
 
     beforeAll(async () => {
+        const socket_handle = await ensure_host_podman_socket();
+        if (!socket_handle) {
+            return;
+        }
+
+        host_podman_socket = socket_handle.path;
+        cleanup.register(() => socket_handle.stop());
+
         source_directory = fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-podman-test-'));
         execFileSync('git', ['init'], { cwd: source_directory });
         fs.mkdirSync(path.join(source_directory, 'src'), { recursive: true });
@@ -61,7 +70,7 @@ describe('sandbox with podman socket access', () => {
         });
         cleanup.register(() => fs.rmSync(source_directory, { recursive: true, force: true }));
 
-        const socket_path = resolve_podman_socket_path();
+        const socket_path = host_podman_socket;
         const manifest = await create_sandbox_from_directory(source_directory, {
             image: TEST_TAG,
             no_install: true,
@@ -75,7 +84,11 @@ describe('sandbox with podman socket access', () => {
         register_destroy_sandbox(cleanup, sandbox_id);
     }, 120_000);
 
-    it('creates a sandbox with socket mount and CONTAINER_HOST (beforeAll sanity check)', () => {
+    it('creates a sandbox with socket mount and CONTAINER_HOST (beforeAll sanity check)', (context) => {
+        if (!host_podman_socket) {
+            context.skip(HOST_PODMAN_SOCKET_SKIP_REASON);
+        }
+
         // Sanity-witness that the file-scope `beforeAll` produced a usable
         // sandbox. Without this, a regression in `create_sandbox_from_directory`
         // would surface as cryptic failures inside the read-only tests below
@@ -84,23 +97,39 @@ describe('sandbox with podman socket access', () => {
         expect(container_name).toBeDefined();
     });
 
-    it('podman is accessible inside the sandbox', () => {
+    it('podman is accessible inside the sandbox', (context) => {
+        if (!host_podman_socket) {
+            context.skip(HOST_PODMAN_SOCKET_SKIP_REASON);
+        }
+
         const output = exec_container(container_name, ['podman', '--version']);
         expect(output).toContain('podman version');
     });
 
-    it('podman can connect to the host runtime via socket', () => {
+    it('podman can connect to the host runtime via socket', (context) => {
+        if (!host_podman_socket) {
+            context.skip(HOST_PODMAN_SOCKET_SKIP_REASON);
+        }
+
         const output = exec_container(container_name, ['podman', 'info', '--format', '{{.Host.RemoteSocket.Exists}}']);
         expect(output.trim()).toBe('true');
     });
 
-    it('podman can list images from inside the sandbox', () => {
+    it('podman can list images from inside the sandbox', (context) => {
+        if (!host_podman_socket) {
+            context.skip(HOST_PODMAN_SOCKET_SKIP_REASON);
+        }
+
         const output = exec_container(container_name, ['podman', 'images', '--format', 'json']);
         const images = JSON.parse(output);
         expect(Array.isArray(images)).toBe(true);
     });
 
-    it('podman can create and remove a container from inside the sandbox', () => {
+    it('podman can create and remove a container from inside the sandbox', (context) => {
+        if (!host_podman_socket) {
+            context.skip(HOST_PODMAN_SOCKET_SKIP_REASON);
+        }
+
         const test_name = `patchlab-inner-test-${Date.now()}`;
         try {
             exec_container(container_name, ['podman', 'create', '--name', test_name, 'node:22-slim', 'true']);
@@ -115,7 +144,11 @@ describe('sandbox with podman socket access', () => {
         }
     });
 
-    it('tests requiring podman can run inside the sandbox', () => {
+    it('tests requiring podman can run inside the sandbox', (context) => {
+        if (!host_podman_socket) {
+            context.skip(HOST_PODMAN_SOCKET_SKIP_REASON);
+        }
+
         const result = exec_container(container_name, [
             'sh', '-c',
             'podman info > /dev/null 2>&1 && echo PODMAN_OK || echo PODMAN_FAIL',
