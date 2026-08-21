@@ -1,7 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, beforeAll, vi } from 'vitest';
-import { spawnSync, type ChildProcess } from 'node:child_process';
-import * as fs from 'node:fs';
-import * as os from 'node:os';
+import { type ChildProcess } from 'node:child_process';
 import * as path from 'node:path';
 
 const { mock_spawn, real_spawn } = vi.hoisted(() => {
@@ -27,6 +25,9 @@ import {
     write_proxy_metadata_for_tests,
 } from '../../../src/local_model_proxy/manager.js';
 import { assert_present } from '../../helpers/assert_present.js';
+import { spawn_argument_includes_proxy_main } from '../../helpers/local_model_proxy_test_helpers.js';
+import { install_isolated_patchlab_home_hooks } from '../../helpers/home_directory.js';
+import { run_npm_script } from '../../helpers/run_npm_script.js';
 
 function is_process_alive(pid: number): boolean {
     try {
@@ -37,37 +38,31 @@ function is_process_alive(pid: number): boolean {
     }
 }
 
-describe('start_host_proxy lifecycle hardening', () => {
-    let patchlab_home: string;
+describe.sequential('start_host_proxy lifecycle hardening', () => {
+    install_isolated_patchlab_home_hooks('patchlab-proxy-life-');
     let sandbox_id: string;
     const original_timeout = process.env.PATCHLAB_TEST_PROXY_METADATA_TIMEOUT_MS;
 
     beforeAll(() => {
-        const build = spawnSync('npm', ['run', 'build'], {
-            cwd: path.resolve(import.meta.dirname, '../../..'),
-            stdio: 'pipe',
-            encoding: 'utf8',
-        });
+        const build = run_npm_script('build', path.resolve(import.meta.dirname, '../../..'));
         expect(build.status, build.stderr).toBe(0);
     });
 
     beforeEach(() => {
-        patchlab_home = fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-proxy-life-'));
-        process.env.PATCHLAB_HOME = patchlab_home;
-        process.env.PATCHLAB_TEST_PROXY_METADATA_TIMEOUT_MS = '200';
-        sandbox_id = 'proxy-lifecycle-sandbox';
+        // Keep short enough for the orphan-daemon case, but above Windows startup
+        // jitter when the full unit project runs in parallel with podman-heavy tests.
+        process.env.PATCHLAB_TEST_PROXY_METADATA_TIMEOUT_MS = '2000';
+        sandbox_id = `proxy-lifecycle-${Date.now()}-${Math.random().toString(36).slice(2)}`;
         mock_spawn.mockImplementation((...args: Parameters<typeof real_spawn>) => real_spawn(...args));
     });
 
     afterEach(async () => {
         stop_host_proxy(sandbox_id);
-        delete process.env.PATCHLAB_HOME;
         if (original_timeout === undefined) {
             delete process.env.PATCHLAB_TEST_PROXY_METADATA_TIMEOUT_MS;
         } else {
             process.env.PATCHLAB_TEST_PROXY_METADATA_TIMEOUT_MS = original_timeout;
         }
-        fs.rmSync(patchlab_home, { recursive: true, force: true });
         mock_spawn.mockReset();
     });
 
@@ -162,7 +157,7 @@ describe('start_host_proxy lifecycle hardening', () => {
 
         mock_spawn.mockImplementation((command, args, options) => {
             const argv = (args ?? []).map(String);
-            if (argv.some((argument) => argument.includes('local_model_proxy/main.js'))) {
+            if (argv.some(spawn_argument_includes_proxy_main)) {
                 const orphan = real_spawn(process.execPath, ['-e', 'setTimeout(() => {}, 5000)'], {
                     detached: true,
                     stdio: 'ignore',

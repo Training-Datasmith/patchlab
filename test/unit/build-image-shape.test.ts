@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import * as os from 'node:os';
 import { DEFAULT_TEST_TOOL, register_default_test_tool } from '../helpers/stub_tool_provider.js';
 
 vi.mock('node:child_process', () => ({
@@ -8,7 +9,7 @@ vi.mock('node:fs', async (original) => {
     const actual = await original<typeof import('node:fs')>();
     return {
         ...actual,
-        mkdtempSync: vi.fn(() => '/tmp/patchlab-test'),
+        mkdtempSync: vi.fn((prefix) => actual.mkdtempSync(prefix)),
         copyFileSync: vi.fn(),
         rmSync: vi.fn(),
     };
@@ -16,11 +17,12 @@ vi.mock('node:fs', async (original) => {
 vi.mock('../../src/container_runtime.js', () => ({
     image_exists: vi.fn(() => false),
     get_runtime_binary: vi.fn(() => 'podman'),
-    runtime_host_tmpdir: vi.fn(() => '/tmp/patchlab-test'),
+    runtime_host_tmpdir: vi.fn(() => os.tmpdir()),
     CONTAINER_UID: 1000,
 }));
 
 import { execFileSync } from 'node:child_process';
+import * as fs from 'node:fs';
 import { build_image } from '../../src/images.js';
 import { OPENCODE_PINNED_VERSION } from '../../src/opencode/version.js';
 import { get_provider } from '../../src/tools/index.js';
@@ -38,8 +40,13 @@ function captured_dockerfile(): string {
         throw new Error('no podman build call captured');
     }
 
-    const options = build_call[2] as { input?: string } | undefined;
-    return options?.input ?? '';
+    const build_args = build_call[1] as string[];
+    const flag_index = build_args.indexOf('-f');
+    if (flag_index < 0) {
+        throw new Error('podman build call missing -f Dockerfile path');
+    }
+
+    return fs.readFileSync(build_args[flag_index + 1], 'utf-8');
 }
 
 describe('build_image Dockerfile shape (tasks 6.6.1, 6.6.2, 6.7, 6.8, 4.5.4)', () => {

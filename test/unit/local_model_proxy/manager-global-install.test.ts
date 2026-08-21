@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
-import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { run_npm_script } from '../../helpers/run_npm_script.js';
 import {
     read_host_proxy_metadata,
     stop_host_proxy,
@@ -24,11 +24,7 @@ describe('start_host_proxy from a globally installed layout', () => {
     const sandbox_id = 'global-install-proxy';
 
     beforeAll(() => {
-        const build = spawnSync('npm', ['run', 'build'], {
-            cwd: REPOSITORY_ROOT,
-            stdio: 'pipe',
-            encoding: 'utf8',
-        });
+        const build = run_npm_script('build', REPOSITORY_ROOT);
         expect(build.status, build.stderr).toBe(0);
         expect(fs.existsSync(COMPILED_MANAGER_PATH)).toBe(true);
     });

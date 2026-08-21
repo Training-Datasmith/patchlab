@@ -9,15 +9,15 @@ import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { create_sandbox_from_directory } from '../test_helpers.js';
-import { DEFAULT_IMAGE } from '../../src/container_runtime.js';
-import { resolve_podman_socket_path } from '../../src/detect/index.js';
-import { exec_runtime_cli } from '../helpers/exec_runtime_cli.js';
+import { create_sandbox_from_directory } from '../../test_helpers.js';
+import { DEFAULT_IMAGE } from '../../../src/container_runtime.js';
+import { resolve_podman_socket_path } from '../../../src/detect/index.js';
+import { exec_runtime_cli } from '../../helpers/exec_runtime_cli.js';
 import {
     create_integration_cleanup_registry,
     register_destroy_sandbox,
-} from '../helpers/integration_cleanup.js';
-import { ensure_host_podman_socket, HOST_PODMAN_SOCKET_SKIP_REASON } from '../helpers/podman_socket.js';
+} from '../../helpers/integration_cleanup.js';
+import { ensure_host_podman_socket, HOST_PODMAN_SOCKET_SKIP_REASON } from '../../helpers/podman_socket.js';
 
 const GIT_ENVIRONMENT = {
     ...process.env,

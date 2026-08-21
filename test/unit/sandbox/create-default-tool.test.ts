@@ -16,7 +16,7 @@ vi.mock('../../../src/sandbox/branch_handshake.js', () => ({
         Array.from(new Set(sources.map((source) => source.repository_root))),
     ),
     execute_phase_1_preflight: vi.fn(async () => new Set<string>()),
-    execute_phase_2_mutations: vi.fn(async () => {
+    execute_phase_2_mutations: vi.fn(() => {
         throw new Error('stop-after-tool-check');
     }),
     rollback_phase_2_created_branches: vi.fn(),
@@ -106,7 +106,8 @@ describe('create_sandbox default tool resolution', () => {
     });
 
     afterEach(() => {
-        vi.restoreAllMocks();
+        mock_verify_per_source_default_tool.mockReset();
+        mock_verify_per_source_default_tool.mockResolvedValue({ override: null });
         fs.rmSync(source_directory, { recursive: true, force: true });
     });
 

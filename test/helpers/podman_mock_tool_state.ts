@@ -95,6 +95,7 @@ export async function build_tool_state_podman_mock(
         remove_container: vi.fn(),
         exec_container: vi.fn(() => ''),
         copy_to_container: vi.fn(),
+        fix_workspace_ownership_if_needed: vi.fn(),
         container_exists: vi.fn(() => true),
         container_running: vi.fn(() => true),
         install_package: vi.fn(),

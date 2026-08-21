@@ -36,8 +36,15 @@ async function wait_for_socket(socket_path: string, timeout_ms: number): Promise
     return is_socket(socket_path);
 }
 
-function ensure_parent_directory(socket_path: string): void {
-    fs.mkdirSync(path.dirname(socket_path), { recursive: true });
+function ensure_parent_directory(socket_path: string): boolean {
+    try {
+        fs.mkdirSync(path.dirname(socket_path), { recursive: true });
+        return true;
+    } catch {
+        // VM-internal paths (for example Lima containerd sockets under /run/user)
+        // are not creatable on the macOS host filesystem.
+        return false;
+    }
 }
 
 function stop_podman_service(service: ChildProcess): void {
@@ -62,7 +69,9 @@ export async function ensure_host_podman_socket(): Promise<Host_Podman_Socket_Ha
         };
     }
 
-    ensure_parent_directory(socket_path);
+    if (!ensure_parent_directory(socket_path)) {
+        return null;
+    }
 
     const unix_url = socket_path.startsWith('/')
         ? `unix://${socket_path}`
