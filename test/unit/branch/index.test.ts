@@ -32,7 +32,12 @@ import {
     execute_phase_2_mutations,
     rollback_phase_2_created_branches,
 } from '../../../src/sandbox/index.js';
-import { build_archive_path, write_session_metadata, read_session_metadata } from '../../../src/archive.js';
+import {
+    build_archive_path,
+    canonical_host_path,
+    read_session_metadata,
+    write_session_metadata,
+} from '../../../src/archive.js';
 import { create_manifest, manifest_primary_source, read_manifest, write_manifest } from '../../../src/manifest.js';
 import {
     GIT_TEST_ENVIRONMENT,
@@ -41,6 +46,14 @@ import {
 } from '../../helpers/git_repository.js';
 import { assert_present } from '../../helpers/assert_present.js';
 import { install_isolated_home_hooks } from '../../helpers/home_directory.js';
+
+function to_forward_slashes(value: string): string {
+    return value.replaceAll('\\', '/');
+}
+
+function compare_host_path(value: string): string {
+    return to_forward_slashes(canonical_host_path(value));
+}
 
 function commit_all(directory: string, message: string): string {
     execFileSync('git', ['add', '-A'], { cwd: directory });
@@ -57,7 +70,7 @@ describe('branch: helpers — read-only on a clean fixture', () => {
     let repository: string;
 
     beforeAll(() => {
-        repository = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-branch-test-')));
+        repository = canonical_host_path(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-branch-test-')));
         initialize_repository_with_initial_commit(repository);
     });
 
@@ -83,7 +96,7 @@ describe('branch: helpers — working-tree mutators (per-test fresh repo)', () =
     let repository: string;
 
     beforeEach(() => {
-        repository = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-branch-mut-')));
+        repository = canonical_host_path(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-branch-mut-')));
         initialize_repository_with_initial_commit(repository);
     });
 
@@ -116,8 +129,8 @@ describe('branch: two-phase multi-repository branch creation', () => {
     let repository_b: string;
 
     beforeEach(() => {
-        repository_a = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-twophase-a-')));
-        repository_b = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-twophase-b-')));
+        repository_a = canonical_host_path(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-twophase-a-')));
+        repository_b = canonical_host_path(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-twophase-b-')));
         initialize_repository_with_initial_commit(repository_a);
         initialize_repository_with_initial_commit(repository_b);
     });
@@ -239,7 +252,7 @@ describe('branch: create and delete', () => {
     let repository: string;
 
     beforeEach(() => {
-        repository = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-create-test-')));
+        repository = canonical_host_path(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-create-test-')));
         initialize_repository_with_initial_commit(repository);
     });
 
@@ -312,7 +325,7 @@ describe('branch: create and delete', () => {
         // that names the remediation (`git commit --allow-empty -m initial`).
         // Build the no-HEAD case fresh — the file's `beforeEach` already
         // committed a README via `init_repository`.
-        const empty_repository = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-empty-')));
+        const empty_repository = canonical_host_path(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-empty-')));
         try {
             execFileSync('git', ['init'], { cwd: empty_repository });
             expect(() => create_patchlab_branch(empty_repository, 'pl-empty'))
@@ -393,8 +406,8 @@ describe('branch: delete_patchlab_branch multi-repository per-repository outcome
     let repository_b: string;
 
     beforeEach(() => {
-        repository_a = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-del-a-')));
-        repository_b = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-del-b-')));
+        repository_a = canonical_host_path(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-del-a-')));
+        repository_b = canonical_host_path(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-del-b-')));
         initialize_repository_with_initial_commit(repository_a);
         initialize_repository_with_initial_commit(repository_b);
     });
@@ -732,7 +745,7 @@ describe('branch: unapplied_session_commits via git cherry', () => {
     let repository: string;
 
     beforeEach(() => {
-        repository = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-cherry-test-')));
+        repository = canonical_host_path(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-cherry-test-')));
         initialize_repository_with_initial_commit(repository);
     });
 
@@ -792,7 +805,7 @@ describe('branch: subdirectory and source_prefix', () => {
     let repository: string;
 
     beforeEach(() => {
-        repository = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-subdir-test-')));
+        repository = canonical_host_path(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-subdir-test-')));
         initialize_repository_with_initial_commit(repository);
     });
 
@@ -818,7 +831,7 @@ describe('branch: resolve_repository_root for legacy manifests', () => {
     let repository: string;
 
     beforeEach(() => {
-        repository = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-legacy-test-')));
+        repository = canonical_host_path(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-legacy-test-')));
         initialize_repository_with_initial_commit(repository);
     });
 
@@ -859,12 +872,12 @@ describe('branch: resolve_repository_root for legacy manifests', () => {
 
         // Resolving should recompute via get_repository_root and write it back.
         const result = resolve_repository_root(id);
-        expect(fs.realpathSync(result)).toBe(fs.realpathSync(repository));
+        expect(compare_host_path(result)).toBe(compare_host_path(repository));
 
         const after = read_manifest(archive_dir);
         const after_primary = manifest_primary_source(after);
         expect(after_primary.repository_root).toBeTruthy();
-        expect(fs.realpathSync(after_primary.repository_root)).toBe(fs.realpathSync(repository));
+        expect(compare_host_path(after_primary.repository_root)).toBe(compare_host_path(repository));
     });
 
     it('rekeys SHA maps when legacy manifest with repository_root: null carries non-null SHAs', () => {
@@ -1015,7 +1028,7 @@ describe('list_branch_files: per-source signature (multi-source-extraction task 
     let repository: string;
 
     beforeAll(() => {
-        repository = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-mpx-repo-')));
+        repository = canonical_host_path(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-mpx-repo-')));
         execFileSync('git', ['init'], { cwd: repository, stdio: 'pipe' });
         // Populate three subpaths plus a top-level file.
         fs.mkdirSync(path.join(repository, 'src', 'ui'), { recursive: true });
@@ -1088,7 +1101,7 @@ describe('resolve_repository_root: legacy synthesis with non-empty source_prefix
     let repository: string;
 
     beforeEach(() => {
-        repository = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-legacysync-repo-')));
+        repository = canonical_host_path(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-legacysync-repo-')));
         execFileSync('git', ['init'], { cwd: repository, stdio: 'pipe' });
         fs.mkdirSync(path.join(repository, 'src', 'ui'), { recursive: true });
         fs.writeFileSync(path.join(repository, 'src', 'ui', 'app.tsx'), 'ui\n');
@@ -1132,7 +1145,7 @@ describe('resolve_repository_root: legacy synthesis with non-empty source_prefix
         // resolve_repository_root triggers the recompute-and-persist
         // codepath. The bug (now fixed) would corrupt host_path here.
         const result = resolve_repository_root(id);
-        expect(fs.realpathSync(result)).toBe(fs.realpathSync(repository));
+        expect(compare_host_path(result)).toBe(compare_host_path(repository));
 
         // After the recompute, the manifest on disk must satisfy the
         // writer invariant. Reading it back exercises the host_path
@@ -1200,11 +1213,11 @@ describe('branch: repository-reachability and named-branch helpers', () => {
     let scratch: string;
 
     beforeAll(() => {
-        repository = fs.realpathSync(
+        repository = canonical_host_path(
             fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-isgit-')),
         );
         initialize_repository_with_initial_commit(repository);
-        scratch = fs.realpathSync(
+        scratch = canonical_host_path(
             fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-notgit-')),
         );
     });
@@ -1273,7 +1286,7 @@ describe('branch: cumulative-diff resolvers', () => {
     }
 
     beforeAll(() => {
-        repository = fs.realpathSync(
+        repository = canonical_host_path(
             fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-diff-')),
         );
         initialize_repository_with_initial_commit(repository);
@@ -1384,8 +1397,10 @@ describe('branch: cumulative-diff resolvers', () => {
         });
 
         it('cleans up the temporary worktree after a successful composition', () => {
-            const tmp_before = fs.readdirSync(os.tmpdir())
-                .filter((entry) => entry.startsWith('patchlab-diff-wt-'));
+            const tmp_before = new Set(
+                fs.readdirSync(os.tmpdir())
+                    .filter((entry) => entry.startsWith('patchlab-diff-wt-')),
+            );
             const pending = [
                 'diff --git a/cleanup.txt b/cleanup.txt',
                 'new file mode 100644',
@@ -1401,8 +1416,8 @@ describe('branch: cumulative-diff resolvers', () => {
 
             const tmp_after = fs.readdirSync(os.tmpdir())
                 .filter((entry) => entry.startsWith('patchlab-diff-wt-'));
-            // No new worktree directory survived the call.
-            expect(tmp_after.length).toBe(tmp_before.length);
+            const leaked = tmp_after.filter((entry) => !tmp_before.has(entry));
+            expect(leaked).toEqual([]);
         });
     });
 });
@@ -1418,7 +1433,7 @@ describe('branch: cumulative-diff resolvers — branch-deletion case', () => {
     const BRANCH = patchlab_branch_name(PATCHLAB_ID);
 
     beforeEach(() => {
-        repository = fs.realpathSync(
+        repository = canonical_host_path(
             fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-diff-deletion-')),
         );
         initialize_repository_with_initial_commit(repository);

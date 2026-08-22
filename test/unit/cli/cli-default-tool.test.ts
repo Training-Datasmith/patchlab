@@ -90,7 +90,7 @@ import {
 } from '../../../src/cli.js';
 import * as tools_index from '../../../src/tools/index.js';
 import type { Sandbox_Manifest } from '../../../src/manifest.js';
-import { build_archive_path, write_session_metadata } from '../../../src/archive.js';
+import { build_archive_path, canonical_host_path, write_session_metadata } from '../../../src/archive.js';
 import { create_manifest, write_manifest } from '../../../src/manifest.js';
 import { create_patchlab_branch } from '../../../src/branch/index.js';
 import { DEFAULT_TEST_TOOL, register_default_test_tool } from '../../helpers/stub_tool_provider.js';
@@ -117,7 +117,7 @@ describe('CLI handlers default --tool on create', () => {
         mock_extract_workspace_copies.mockReset();
         register_default_test_tool();
 
-        repository = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-cli-default-tool-')));
+        repository = canonical_host_path(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-cli-default-tool-')));
         initialize_repository_with_initial_commit(repository);
         create_patchlab_branch(repository, patchlab_id);
 
@@ -213,7 +213,7 @@ describe('CLI handlers --prompt', () => {
         mock_extract_workspace_copies.mockReset();
         register_default_test_tool();
 
-        repository = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-cli-prompt-')));
+        repository = canonical_host_path(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-cli-prompt-')));
         mock_create_sandbox.mockImplementation(async () => ({
             id: 'new-sandbox-id',
             container_name: 'patchlab-new',
@@ -395,7 +395,7 @@ describe('CLI handlers --prompt', () => {
         expect(mock_create_sandbox).toHaveBeenCalledWith(
             expect.anything(),
             expect.objectContaining({
-                context_paths: expect.arrayContaining([spec_path]),
+                context_paths: expect.arrayContaining([canonical_host_path(spec_path)]),
             }),
         );
         expect(mock_exec_interactive).toHaveBeenCalledWith(
