@@ -3,10 +3,10 @@
  *
  * Covers the `sources-in-manifest` feature: sourcing the `sources` array
  * from `.patchlab.json` when no CLI source arguments are provided. All four
- * scenarios exercise the validation layer only — no podman runtime required.
- * The CLI emits `Resolved N source(s).` on stderr immediately after
- * `resolve_source_inputs` returns successfully, before any image build. That
- * marker is used as the positive assertion to prove validation passed.
+ * scenarios exercise the validation layer. The CLI emits `Resolved N source(s).`
+ * on stderr immediately after `resolve_source_inputs` returns successfully,
+ * before any image build — but create continues afterward, so success-path
+ * cases provision real containers. `afterEach` tears those sandboxes down.
  *
  * Build dependency: assumes `npm run build` has produced `dist/cli.js`.
  *
@@ -23,6 +23,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { DEFAULT_TEST_TOOL, write_default_test_tool_manifest_to_home } from '../helpers/stub_tool_provider.js';
 import { cli_subprocess_env } from '../helpers/home_directory.js';
+import { destroy_cli_subprocess_sandboxes } from '../helpers/cli_subprocess_cleanup.js';
 
 const REPOSITORY_ROOT = path.resolve(__dirname, '..', '..');
 const CLI_PATH = path.join(REPOSITORY_ROOT, 'dist', 'cli.js');
@@ -96,7 +97,8 @@ describe('patchlab create — manifest sources (.patchlab.json sources array)', 
         init_git_repository(other_repository);
     });
 
-    afterEach(() => {
+    afterEach(async () => {
+        await destroy_cli_subprocess_sandboxes(home_directory);
         for (const directory of [home_directory, workspace, repository, other_repository]) {
             try {
                 fs.rmSync(directory, { recursive: true, force: true });

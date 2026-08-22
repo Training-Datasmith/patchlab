@@ -9,9 +9,11 @@ import {
     update_overrides,
     type Patchlab_Overrides,
 } from '../../src/overrides.js';
+import { canonical_host_path } from '../../src/archive.js';
 import { ConsoleLogger, set_logger } from '../../src/logger.js';
 import { RecordingLogger } from '../helpers/recording_logger.js';
 import { initialize_repository_with_initial_commit } from '../helpers/git_repository.js';
+import { assert_present } from '../helpers/assert_present.js';
 
 describe('overrides', () => {
     let temp_dir: string;
@@ -336,7 +338,7 @@ function to_forward_slashes(value: string): string {
 
 /** Canonicalize for equality: realpath (macOS `/var` vs `/private/var`) then `/`. */
 function canonical_path(value: string): string {
-    return to_forward_slashes(fs.realpathSync(value));
+    return to_forward_slashes(canonical_host_path(value));
 }
 
 describe('load_sources_from_manifest', () => {
@@ -407,8 +409,9 @@ describe('load_sources_from_manifest', () => {
             const discovered = load_sources_from_manifest(subdirectory);
             expect(discovered).not.toBeUndefined();
             expect(discovered?.entries).toEqual(['patchlab']);
+            assert_present(discovered);
             // `get_repository_root` returns the canonical realpath of the git root.
-            expect(discovered?.base_directory).toBe(fs.realpathSync(git_root));
+            expect(canonical_path(discovered.base_directory)).toBe(canonical_path(git_root));
         } finally {
             fs.rmSync(git_root, { recursive: true, force: true });
         }

@@ -14,10 +14,8 @@
 #       only place its assertions actually fire. The `macos` project self-
 #       gates on non-darwin hosts and is inert on Ubuntu/Windows runners.
 #   test-macos-platform — vitest `unit` + `macos` on macos-latest (real APFS,
-#       no Lima required).
-#   test-macos-nerdctl — vitest `integration` + `integration-nerdctl` on
-#       macos-latest with Lima/nerdctl, runtime assertion, timeout, and Lima
-#       diagnostics upload on failure.
+#       no Lima required). Nerdctl integration (`integration-nerdctl`) is
+#       local-macOS only: GHA arm64 runners cannot start Lima VMs.
 #   test-posix — vitest `posix` project on Ubuntu. The local
 #       `npm run test:posix` script wraps this in a Linux container on
 #       Windows and macOS hosts; on a Linux runner the indirection is
@@ -201,67 +199,3 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npx vitest run --project unit --project macos
-
-  test-macos-nerdctl:
-    runs-on: macos-latest
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-      - name: Install Lima and start default VM
-        env:
-          HOMEBREW_NO_REQUIRE_TAP_TRUST: 1
-        run: |
-          brew untap aws/tap 2>/dev/null || true
-          brew install lima
-          for attempt in 1 2 3; do
-            if limactl start --tty=false; then
-              break
-            fi
-            if [ "$attempt" -eq 3 ]; then
-              echo "Lima VM failed to start after ${attempt} attempts" >&2
-              exit 1
-            fi
-            sleep 15
-          done
-      - name: Verify nerdctl runtime
-        run: |
-          nerdctl.lima --version
-          nerdctl.lima run --rm hello-world
-      - run: npm ci
-      - run: npm run build
-      - name: Assert nerdctl runtime selection
-        run: node scripts/assert-container-runtime.mjs nerdctl
-        env:
-          PATCHLAB_CONTAINER_RUNTIME: nerdctl
-          PATCHLAB_REQUIRED_CONTAINER_RUNTIME: nerdctl
-      - run: npx vitest run --project integration --project integration-nerdctl
-        env:
-          PATCHLAB_CONTAINER_RUNTIME: nerdctl
-          PATCHLAB_REQUIRED_CONTAINER_RUNTIME: nerdctl
-          PATCHLAB_HOME: ${{ runner.temp }}/patchlab-integration-home
-      - name: Verify integration cleanup
-        if: always()
-        run: npm run verify:integration-cleanup
-        env:
-          PATCHLAB_CONTAINER_RUNTIME: nerdctl
-          PATCHLAB_HOME: ${{ runner.temp }}/patchlab-integration-home
-      - name: Capture Lima diagnostics
-        if: failure() || cancelled()
-        run: |
-          mkdir -p lima-diagnostics
-          limactl list > lima-diagnostics/limactl-list.txt 2>&1 || true
-          limactl shell default -- nerdctl.lima info > lima-diagnostics/nerdctl-info.txt 2>&1 || true
-          if [ -f "$HOME/.lima/default/serial.log" ]; then
-            cp "$HOME/.lima/default/serial.log" lima-diagnostics/serial.log
-          fi
-      - name: Upload Lima diagnostics
-        if: failure() || cancelled()
-        uses: actions/upload-artifact@v4
-        with:
-          name: lima-diagnostics-${{ github.run_id }}
-          path: lima-diagnostics/
-          if-no-files-found: ignore

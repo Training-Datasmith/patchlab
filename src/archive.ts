@@ -187,11 +187,29 @@ export function build_session_path(
 }
 
 /**
- * Resolve `input` to an absolute path, following symlinks when the target exists.
- * Non-existent paths (e.g. unit-test fixtures) fall back to `path.resolve`.
+ * Resolve `input` to the canonical on-disk path, following symlinks when the
+ * target exists. On Windows, normalizes separator spelling and prefers the
+ * native realpath implementation so 8.3 short names (for example `RUNNER~1`)
+ * and long-path forms compare equal. Non-existent paths fall back to
+ * `path.resolve`.
  */
-function canonical_existing_path(input: string): string {
-    const resolved = path.resolve(input);
+export function canonical_host_path(input: string): string {
+    let resolved = path.resolve(input);
+    if (process.platform === 'win32') {
+        resolved = resolved.replaceAll('/', '\\');
+        try {
+            const realpath_sync = fs.realpathSync as typeof fs.realpathSync & {
+                native?: (target: fs.PathLike) => string;
+            };
+            if (typeof realpath_sync.native === 'function') {
+                return realpath_sync.native(resolved);
+            }
+            return fs.realpathSync(resolved);
+        } catch (_path_missing) {
+            return resolved;
+        }
+    }
+
     try {
         return fs.realpathSync(resolved);
     } catch (_path_missing) {
@@ -216,7 +234,7 @@ export function get_repository_root(source_path: string): string {
             stdio: ['ignore', 'pipe', 'pipe'],
             encoding: 'utf-8',
         });
-        return canonical_existing_path(output.trim());
+        return canonical_host_path(output.trim());
     } catch (_not_a_git_repository) {
         throw new Error(
             `Source path is not inside a git repository: ${resolved}. ` +
@@ -233,8 +251,8 @@ export function get_source_prefix(
     repository_root: string,
     source_path: string
 ): string {
-    const repository = canonical_existing_path(repository_root);
-    const source = canonical_existing_path(source_path);
+    const repository = canonical_host_path(repository_root);
+    const source = canonical_host_path(source_path);
     const relative = path.relative(repository, source);
     if (relative === '' || relative === '.') {
         return '';

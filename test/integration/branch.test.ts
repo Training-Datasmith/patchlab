@@ -19,7 +19,7 @@ import {
     write_session_metadata,
 } from '../../src/archive.js';
 import { read_manifest } from '../../src/manifest.js';
-import { exec_container } from '../../src/container_runtime.js';
+import { exec_container, stop_and_remove_container_best_effort } from '../../src/container_runtime.js';
 import { strict as assert } from 'node:assert';
 import { DEFAULT_TEST_TOOL } from '../helpers/stub_tool_provider.js';
 import { assert_present } from '../helpers/assert_present.js';
@@ -44,6 +44,8 @@ function commit_clean(repo: string): void {
 describe('branch: session commit integration', () => {
     let source_directory: string;
     const cleanup_ids: string[] = [];
+    /** Containers whose archive was removed without destroy — torn down by name in afterEach. */
+    const orphan_container_names: string[] = [];
 
     beforeEach(() => {
         source_directory = fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-branch-int-'));
@@ -62,8 +64,20 @@ describe('branch: session commit integration', () => {
             }
         }
         cleanup_ids.length = 0;
+        for (const container_name of orphan_container_names) {
+            try {
+                stop_and_remove_container_best_effort(container_name);
+            } catch {
+                // ignore
+            }
+        }
+        orphan_container_names.length = 0;
         fs.rmSync(source_directory, { recursive: true, force: true });
     });
+
+    function register_orphan_container(container_name: string): void {
+        orphan_container_names.push(container_name);
+    }
 
     function primary_repo_for(manifest_id: string): string {
         const m = read_manifest(build_archive_path(manifest_id));
@@ -431,7 +445,8 @@ describe('branch: session commit integration', () => {
         // Set up two patchlabs in the same source repo.
         const m1 = await create_sandbox_from_directory(source_directory, { no_install: true });
         const m2 = await create_sandbox_from_directory(source_directory, { no_install: true });
-        cleanup_ids.push(m1.id, m2.id);
+        cleanup_ids.push(m1.id);
+        register_orphan_container(m2.container_name);
 
         const branch1 = patchlab_branch_name(m1.id);
         const branch2 = patchlab_branch_name(m2.id);
@@ -461,9 +476,7 @@ describe('branch: session commit integration', () => {
         }
         expect(orphan_exists).toBe(false);
 
-        // Don't try to destroy m2 in cleanup — its archive is already gone.
-        cleanup_ids.length = 0;
-        cleanup_ids.push(m1.id);
+        // m2's archive is gone so destroy_sandbox cannot run; its container is in orphan_container_names.
     });
 
     /**
@@ -505,6 +518,7 @@ describe('branch: session commit integration', () => {
         write_session_metadata(orphan.id, session_number, session_metadata);
 
         // Orphan the branch: drop the archive directory without going through destroy.
+        register_orphan_container(orphan.container_name);
         fs.rmSync(build_archive_path(orphan.id), { recursive: true, force: true });
 
         return { repository_root, branch, survivor_id: survivor.id };

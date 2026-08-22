@@ -17,6 +17,33 @@ const COMPILED_MANAGER_PATH = path.join(
     'manager.js',
 );
 
+function sleep(milliseconds: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+/** Windows may keep the detached proxy's inherited cwd locked briefly after kill. */
+async function remove_directory_with_retry(
+    directory: string,
+    attempts = 5,
+    delay_ms = 100,
+): Promise<void> {
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+        try {
+            fs.rmSync(directory, { recursive: true, force: true });
+            return;
+        } catch (error) {
+            if (attempt === attempts) {
+                throw error;
+            }
+            const message = error instanceof Error ? error.message : String(error);
+            console.warn(
+                `foreign_cwd cleanup failed (attempt ${attempt}/${attempts}): ${message}; retrying in ${delay_ms}ms`,
+            );
+            await sleep(delay_ms);
+        }
+    }
+}
+
 describe('start_host_proxy from a globally installed layout', () => {
     let patchlab_home: string;
     let foreign_cwd: string;
@@ -42,7 +69,7 @@ describe('start_host_proxy from a globally installed layout', () => {
         stop_host_proxy(sandbox_id);
         delete process.env.PATCHLAB_HOME;
         fs.rmSync(patchlab_home, { recursive: true, force: true });
-        fs.rmSync(foreign_cwd, { recursive: true, force: true });
+        await remove_directory_with_retry(foreign_cwd);
     });
 
     it('starts the detached daemon when cwd is unrelated to the install tree', async () => {

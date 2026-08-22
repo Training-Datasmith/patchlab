@@ -29,32 +29,25 @@ describe('macOS nerdctl CI guardrails (R11)', () => {
         expect(config_source).toContain("PATCHLAB_CONTAINER_RUNTIME: 'nerdctl'");
     });
 
-    it('gives the macOS nerdctl job a timeout and Lima diagnostics upload', () => {
+    it('does not run Lima nerdctl integration on GitHub-hosted macOS runners', () => {
         const workflow = fs.readFileSync(
             path.join(REPOSITORY_ROOT, '.github/workflows/ci.yml'),
             'utf-8',
         );
 
-        const nerdctl_job = workflow.slice(workflow.indexOf('test-macos-nerdctl:'));
-
-        expect(nerdctl_job).toMatch(/timeout-minutes:\s*\d+/);
-        expect(nerdctl_job).toMatch(/upload-artifact@v4/);
-        expect(nerdctl_job).toMatch(/assert-container-runtime\.mjs nerdctl/);
+        expect(workflow).not.toContain('test-macos-nerdctl:');
+        expect(workflow).not.toContain('limactl start');
     });
 
-    it('splits macOS platform tests from the Lima nerdctl integration job', () => {
+    it('keeps macOS platform tests separate from nerdctl integration', () => {
         const workflow = fs.readFileSync(
             path.join(REPOSITORY_ROOT, '.github/workflows/ci.yml'),
             'utf-8',
         );
 
         expect(workflow).toContain('test-macos-platform:');
-        expect(workflow).toContain('test-macos-nerdctl:');
 
-        const platform_job = workflow.slice(
-            workflow.indexOf('test-macos-platform:'),
-            workflow.indexOf('test-macos-nerdctl:'),
-        );
+        const platform_job = workflow.slice(workflow.indexOf('test-macos-platform:'));
         expect(platform_job).toMatch(/--project macos/);
         expect(platform_job).not.toContain('integration-nerdctl');
     });

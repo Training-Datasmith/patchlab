@@ -9,6 +9,7 @@ import { install_isolated_home_hooks } from '../helpers/home_directory.js';
 import {
     build_archive_path,
     build_session_path,
+    canonical_host_path,
     get_repository_root,
     get_source_prefix,
     next_session_number,
@@ -60,7 +61,7 @@ describe('archive: git helpers', () => {
     let temporary_directory: string;
 
     beforeEach(() => {
-        temporary_directory = fs.realpathSync(
+        temporary_directory = canonical_host_path(
             fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-archive-test-'))
         );
     });
@@ -75,7 +76,7 @@ describe('archive: git helpers', () => {
         fs.mkdirSync(subdir, { recursive: true });
 
         const root = get_repository_root(subdir);
-        expect(root).toBe(temporary_directory);
+        expect(canonical_host_path(root)).toBe(canonical_host_path(temporary_directory));
     });
 
     it('get_repository_root throws when path is not in a git repo', () => {

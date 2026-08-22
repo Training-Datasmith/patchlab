@@ -3,17 +3,22 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { expand_manifest_sources, resolve_source_inputs } from '../../src/sources.js';
+import { canonical_host_path } from '../../src/archive.js';
 import { initialize_repository_with_initial_commit } from '../helpers/git_repository.js';
 
 /**
  * Normalize backslashes to forward slashes for cross-platform path equality.
  * `git rev-parse --show-toplevel` returns forward-slash paths on every host;
- * `fs.realpathSync` returns native-separator paths on Windows. The two
+ * `canonical_host_path` returns native-separator paths on Windows. The two
  * representations are semantically identical for the same on-disk location,
  * so the tests compare them after normalization.
  */
 function to_forward_slashes(value: string): string {
     return value.replaceAll('\\', '/');
+}
+
+function compare_host_path(value: string): string {
+    return to_forward_slashes(canonical_host_path(value));
 }
 
 // Hoisted fixture: every test in this file calls `resolve_source_inputs`,
@@ -29,9 +34,9 @@ describe('resolve_source_inputs', () => {
     let other_repository: string;
 
     beforeAll(() => {
-        repository = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-sources-')));
+        repository = canonical_host_path(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-sources-')));
         initialize_repository_with_initial_commit(repository);
-        other_repository = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-sources-other-')));
+        other_repository = canonical_host_path(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-sources-other-')));
         initialize_repository_with_initial_commit(other_repository);
     });
 
@@ -43,10 +48,10 @@ describe('resolve_source_inputs', () => {
     it('single source at repo root yields one entry with empty source_prefix', () => {
         const sources = resolve_source_inputs(repository, []);
         expect(sources).toHaveLength(1);
-        expect(to_forward_slashes(sources[0].repository_root)).toBe(to_forward_slashes(repository));
+        expect(compare_host_path(sources[0].repository_root)).toBe(compare_host_path(repository));
         expect(sources[0].source_prefix).toBe('');
         expect(sources[0].mount_name).toBe('');
-        expect(to_forward_slashes(sources[0].host_path)).toBe(to_forward_slashes(repository));
+        expect(compare_host_path(sources[0].host_path)).toBe(compare_host_path(repository));
     });
 
     it('single source at subdirectory yields one entry with derived prefix', () => {
@@ -54,7 +59,7 @@ describe('resolve_source_inputs', () => {
         fs.mkdirSync(subdirectory, { recursive: true });
         const sources = resolve_source_inputs(subdirectory, []);
         expect(sources).toHaveLength(1);
-        expect(to_forward_slashes(sources[0].repository_root)).toBe(to_forward_slashes(repository));
+        expect(compare_host_path(sources[0].repository_root)).toBe(compare_host_path(repository));
         expect(sources[0].source_prefix).toBe('src/ui');
         expect(sources[0].mount_name).toBe('src/ui');
     });
@@ -67,8 +72,8 @@ describe('resolve_source_inputs', () => {
 
         const sources = resolve_source_inputs(ui, [server]);
         expect(sources).toHaveLength(2);
-        expect(to_forward_slashes(sources[0].repository_root)).toBe(to_forward_slashes(repository));
-        expect(to_forward_slashes(sources[1].repository_root)).toBe(to_forward_slashes(repository));
+        expect(compare_host_path(sources[0].repository_root)).toBe(compare_host_path(repository));
+        expect(compare_host_path(sources[1].repository_root)).toBe(compare_host_path(repository));
         expect(sources[0].source_prefix).toBe('src/ui');
         expect(sources[1].source_prefix).toBe('src/server');
     });
@@ -88,8 +93,8 @@ describe('resolve_source_inputs', () => {
             [{ host_path: other_repository, mount_name: 'b' }],
         );
         expect(sources).toHaveLength(2);
-        expect(to_forward_slashes(sources[0].repository_root)).toBe(to_forward_slashes(repository));
-        expect(to_forward_slashes(sources[1].repository_root)).toBe(to_forward_slashes(other_repository));
+        expect(compare_host_path(sources[0].repository_root)).toBe(compare_host_path(repository));
+        expect(compare_host_path(sources[1].repository_root)).toBe(compare_host_path(other_repository));
         expect(sources[0].mount_name).toBe('a');
         expect(sources[1].mount_name).toBe('b');
     });
@@ -284,7 +289,7 @@ describe('resolve_source_inputs', () => {
         // `git rev-parse --show-toplevel` — that fails for a path outside any
         // git repository. Originally lived in `test/integration/sandbox.test.ts`
         // as `rejects source not in a git repository`.
-        const non_git_directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-nogit-')));
+        const non_git_directory = canonical_host_path(fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-nogit-')));
         try {
             fs.writeFileSync(path.join(non_git_directory, 'file.txt'), 'content\n');
             expect(() => resolve_source_inputs(non_git_directory, [])).toThrow(/git repository/i);
@@ -399,7 +404,7 @@ describe('string entries end-to-end: expand_manifest_sources → resolve_source_
     let repo_b: string;
 
     beforeAll(() => {
-        parent_directory = fs.realpathSync(
+        parent_directory = canonical_host_path(
             fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-sources-e2e-')),
         );
         repo_a = path.join(parent_directory, 'repo-a');
@@ -422,8 +427,8 @@ describe('string entries end-to-end: expand_manifest_sources → resolve_source_
         expect(sources).toHaveLength(1);
         expect(sources[0].source_prefix).toBe('');
         expect(sources[0].mount_name).toBe('repo-a');
-        expect(to_forward_slashes(sources[0].repository_root)).toBe(
-            to_forward_slashes(repo_a),
+        expect(compare_host_path(sources[0].repository_root)).toBe(
+            compare_host_path(repo_a),
         );
     });
 
@@ -433,8 +438,8 @@ describe('string entries end-to-end: expand_manifest_sources → resolve_source_
         expect(sources).toHaveLength(1);
         expect(sources[0].source_prefix).toBe('src');
         expect(sources[0].mount_name).toBe('repo-a/src');
-        expect(to_forward_slashes(sources[0].repository_root)).toBe(
-            to_forward_slashes(repo_a),
+        expect(compare_host_path(sources[0].repository_root)).toBe(
+            compare_host_path(repo_a),
         );
     });
 
@@ -445,8 +450,8 @@ describe('string entries end-to-end: expand_manifest_sources → resolve_source_
         expect(sources).toHaveLength(2);
         expect(sources[0].mount_name).toBe('repo-a/src');
         expect(sources[1].mount_name).toBe('repo-a/test');
-        expect(to_forward_slashes(sources[0].repository_root)).toBe(
-            to_forward_slashes(sources[1].repository_root),
+        expect(compare_host_path(sources[0].repository_root)).toBe(
+            compare_host_path(sources[1].repository_root),
         );
     });
 

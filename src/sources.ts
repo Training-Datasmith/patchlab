@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { get_repository_root, get_source_prefix } from './archive.js';
+import { get_repository_root, get_source_prefix, canonical_host_path } from './archive.js';
 import type { Source_Specification } from './manifest.js';
 import type { Source_Entry } from './overrides.js';
 
@@ -62,7 +62,7 @@ export function resolve_source_inputs(
         if (!fs.existsSync(resolved_path)) {
             throw new Error(`Source directory not found: ${resolved_path}`);
         }
-        const host_path = fs.realpathSync(resolved_path);
+        const host_path = canonical_host_path(resolved_path);
         if (!fs.statSync(host_path).isDirectory()) {
             throw new Error(`Source path is not a directory: ${host_path}`);
         }

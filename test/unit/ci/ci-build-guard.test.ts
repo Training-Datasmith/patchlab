@@ -36,13 +36,4 @@ describe('CI build guardrails', () => {
         expect(vitest_index, `${job_name} must run vitest`).toBeGreaterThan(-1);
         expect(build_index, `${job_name} must build before vitest`).toBeLessThan(vitest_index);
     });
-
-    it('already builds before nerdctl integration on macOS', () => {
-        const block = job_block(workflow, 'test-macos-nerdctl');
-        const build_index = block.indexOf('npm run build');
-        const vitest_index = block.indexOf('npx vitest run');
-
-        expect(build_index).toBeGreaterThan(-1);
-        expect(build_index).toBeLessThan(vitest_index);
-    });
 });

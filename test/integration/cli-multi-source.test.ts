@@ -3,10 +3,10 @@
  *
  * The validation rules (same-repository invariant, source-prefix uniqueness,
  * empty-prefix exclusivity, no nested-prefix overlap) fire INSIDE
- * `resolve_source_inputs` before any container or branch is created. This
- * suite asserts the user-facing outcome for each rule by spawning the built
- * CLI as a subprocess and observing exit code + stderr — no podman runtime
- * is required for these specific paths.
+ * `resolve_source_inputs` before any container or branch is created. Tests
+ * that pass validation still run the full create path afterward, so each
+ * success-path case provisions a real container on the shared runtime.
+ * `afterEach` tears those sandboxes down via `destroy_cli_subprocess_sandboxes`.
  *
  * Build dependency: assumes `npm run build` has produced `dist/cli.js`.
  *
@@ -21,6 +21,9 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { DEFAULT_TEST_TOOL, write_default_test_tool_manifest_to_home } from '../helpers/stub_tool_provider.js';
 import { cli_subprocess_env } from '../helpers/home_directory.js';
+import {
+    destroy_cli_subprocess_sandboxes,
+} from '../helpers/cli_subprocess_cleanup.js';
 
 const REPOSITORY_ROOT = path.resolve(__dirname, '..', '..');
 const CLI_PATH = path.join(REPOSITORY_ROOT, 'dist', 'cli.js');
@@ -82,7 +85,8 @@ describe('patchlab create — multi-source flag parsing and validation', () => {
         init_git_repository(other_repository);
     });
 
-    afterEach(() => {
+    afterEach(async () => {
+        await destroy_cli_subprocess_sandboxes(home_directory);
         try {
             fs.rmSync(home_directory, { recursive: true, force: true });
         } catch (_ignored) {
