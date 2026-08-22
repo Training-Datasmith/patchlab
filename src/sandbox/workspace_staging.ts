@@ -612,9 +612,14 @@ export function prepare_workspace(container_name: string, working_directory: str
     // directory) before each command, so a second exec after `rm -rf` fails to
     // chdir into the directory it just deleted. One shell chdir's once (the dir
     // still exists), removes it, then recreates it by absolute path.
+    //
+    // Run as root: socket-mounted sandboxes use `--userns=keep-id`, so a
+    // non-root exec inherits the image user and cannot recreate a workspace
+    // directory owned by root or another uid (common on stock base images).
     exec_container(container_name, [
         'sh', '-c', 'rm -rf "$1" && mkdir -p "$1"', 'sh', working_directory,
-    ]);
+    ], { user: 'root' });
+    fix_workspace_ownership_if_needed(container_name, working_directory);
 }
 
 export function overlay_into_container(

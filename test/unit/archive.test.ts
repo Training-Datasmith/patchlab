@@ -75,7 +75,7 @@ describe('archive: git helpers', () => {
         fs.mkdirSync(subdir, { recursive: true });
 
         const root = get_repository_root(subdir);
-        expect(fs.realpathSync(root)).toBe(temporary_directory);
+        expect(root).toBe(temporary_directory);
     });
 
     it('get_repository_root throws when path is not in a git repo', () => {

@@ -9,7 +9,6 @@ import {
     create_integration_cleanup_registry,
     register_destroy_sandbox,
 } from '../../helpers/integration_cleanup.js';
-import { ensure_host_podman_socket, HOST_PODMAN_SOCKET_SKIP_REASON } from '../../helpers/podman_socket.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -31,131 +30,10 @@ afterAll(async () => {
     remove_test_images();
 });
 
-// Tests 1-6 below all probe ONE shared socket-mounted sandbox: tests 2-5 are
-// read-only inspections of `podman` running inside, and test 6 writes a tiny
-// /tmp script that no sibling references. Per
-// [documents/testing-strategy.md](../../../documents/testing-strategy.md)
-// "Within an integration file: shared sandbox vs per-test", the sandbox
-// creation lifts into `beforeAll` next to the image build at the file scope.
-// Tests 7-9 (image-label inspections) sit in their own describe further down
-// — they read labels from the host-built image TEST_TAG, not the sandbox,
-// and stay in integration because the producer step (`build_image` in the
-// file-scope `beforeAll`) crosses the host↔container boundary.
-describe('sandbox with podman socket access', () => {
-    let source_directory: string;
-    let sandbox_id: string;
-    let container_name: string;
-    let host_podman_socket: string | null = null;
-
-    beforeAll(async () => {
-        const socket_handle = await ensure_host_podman_socket();
-        if (!socket_handle) {
-            return;
-        }
-
-        host_podman_socket = socket_handle.path;
-        cleanup.register(() => socket_handle.stop());
-
-        source_directory = fs.mkdtempSync(path.join(os.tmpdir(), 'patchlab-podman-test-'));
-        execFileSync('git', ['init'], { cwd: source_directory });
-        fs.mkdirSync(path.join(source_directory, 'src'), { recursive: true });
-        fs.writeFileSync(
-            path.join(source_directory, 'src', 'runner.ts'),
-            "import { execFileSync } from 'node:child_process';\nexecFileSync('podman', ['info']);\n"
-        );
-        execFileSync('git', ['add', '-A'], { cwd: source_directory });
-        execFileSync('git', ['commit', '-m', 'init', '--allow-empty'], {
-            cwd: source_directory,
-            env: { ...process.env, GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 'test@test', GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 'test@test' },
-        });
-        cleanup.register(() => fs.rmSync(source_directory, { recursive: true, force: true }));
-
-        const socket_path = host_podman_socket;
-        const manifest = await create_sandbox_from_directory(source_directory, {
-            image: TEST_TAG,
-            no_install: true,
-            volume_mounts: [`${socket_path}:/run/podman/podman.sock`],
-            environment_variables: {
-                CONTAINER_HOST: 'unix:///run/podman/podman.sock',
-            },
-        });
-        sandbox_id = manifest.id;
-        container_name = manifest.container_name;
-        register_destroy_sandbox(cleanup, sandbox_id);
-    }, 120_000);
-
-    it('creates a sandbox with socket mount and CONTAINER_HOST (beforeAll sanity check)', (context) => {
-        if (!host_podman_socket) {
-            context.skip(HOST_PODMAN_SOCKET_SKIP_REASON);
-        }
-
-        // Sanity-witness that the file-scope `beforeAll` produced a usable
-        // sandbox. Without this, a regression in `create_sandbox_from_directory`
-        // would surface as cryptic failures inside the read-only tests below
-        // rather than a clear "the sandbox couldn't be built" message.
-        expect(sandbox_id).toBeDefined();
-        expect(container_name).toBeDefined();
-    });
-
-    it('podman is accessible inside the sandbox', (context) => {
-        if (!host_podman_socket) {
-            context.skip(HOST_PODMAN_SOCKET_SKIP_REASON);
-        }
-
-        const output = exec_container(container_name, ['podman', '--version']);
-        expect(output).toContain('podman version');
-    });
-
-    it('podman can connect to the host runtime via socket', (context) => {
-        if (!host_podman_socket) {
-            context.skip(HOST_PODMAN_SOCKET_SKIP_REASON);
-        }
-
-        const output = exec_container(container_name, ['podman', 'info', '--format', '{{.Host.RemoteSocket.Exists}}']);
-        expect(output.trim()).toBe('true');
-    });
-
-    it('podman can list images from inside the sandbox', (context) => {
-        if (!host_podman_socket) {
-            context.skip(HOST_PODMAN_SOCKET_SKIP_REASON);
-        }
-
-        const output = exec_container(container_name, ['podman', 'images', '--format', 'json']);
-        const images = JSON.parse(output);
-        expect(Array.isArray(images)).toBe(true);
-    });
-
-    it('podman can create and remove a container from inside the sandbox', (context) => {
-        if (!host_podman_socket) {
-            context.skip(HOST_PODMAN_SOCKET_SKIP_REASON);
-        }
-
-        const test_name = `patchlab-inner-test-${Date.now()}`;
-        try {
-            exec_container(container_name, ['podman', 'create', '--name', test_name, 'node:22-slim', 'true']);
-            const exists_output = exec_container(container_name, [
-                'sh', '-c', `podman container exists ${test_name} && echo yes || echo no`,
-            ]);
-            expect(exists_output.trim()).toBe('yes');
-        } finally {
-            try {
-                exec_container(container_name, ['podman', 'rm', '-f', test_name]);
-            } catch { /* ignore */ }
-        }
-    });
-
-    it('tests requiring podman can run inside the sandbox', (context) => {
-        if (!host_podman_socket) {
-            context.skip(HOST_PODMAN_SOCKET_SKIP_REASON);
-        }
-
-        const result = exec_container(container_name, [
-            'sh', '-c',
-            'podman info > /dev/null 2>&1 && echo PODMAN_OK || echo PODMAN_FAIL',
-        ]);
-        expect(result.trim()).toBe('PODMAN_OK');
-    });
-
+// Image-label inspections stay in integration because the producer step
+// (`build_image` in the file-scope `beforeAll`) crosses the host↔container
+// boundary.
+describe('podman-capable image labels', () => {
     // Task 6.7: build-image writes capabilities label to image
     it('image has capabilities label with expected value', () => {
         const caps = get_image_capabilities(TEST_TAG);
@@ -213,13 +91,8 @@ describe('image listing functions', () => {
     });
 });
 
-// Negative complement to the positive suite above. The positive tests prove
-// that WHEN the caller asks for socket access (via `volume_mounts` +
-// `environment_variables`), the resulting container can reach the host
-// runtime. They do NOT prove that the socket / `CONTAINER_HOST` are absent
-// when the caller does NOT ask for them — a regression that unconditionally
-// mounted `/run/podman/podman.sock` regardless of caller options would pass
-// the positive suite. This describe locks the off-by-default contract.
+// Locks the off-by-default contract: socket mounts and CONTAINER_HOST are not
+// injected unless the caller explicitly approves socket access.
 describe('sandbox WITHOUT podman socket access — off-by-default contract', () => {
     let source_directory: string;
     let no_socket_sandbox_id: string;

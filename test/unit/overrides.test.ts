@@ -326,11 +326,9 @@ describe('overrides', () => {
 
 /**
  * Normalize path separators to forward slashes for cross-platform equality
- * assertions. `get_repository_root` delegates to `git rev-parse --show-toplevel`,
- * which always returns forward-slash paths; `fs.mkdtempSync` returns native-
- * separator paths on Windows. macOS may add a `/private` prefix via realpath.
- * Compare through `canonical_path()` so both representations resolve to the same
- * location before asserting equality.
+ * assertions. `get_repository_root` canonicalizes git output with `realpathSync`
+ * so repository roots match `fs.realpathSync` on temp directories (including
+ * Windows 8.3 short-name vs long-name pairs on CI runners).
  */
 function to_forward_slashes(value: string): string {
     return value.replaceAll('\\', '/');
@@ -409,11 +407,8 @@ describe('load_sources_from_manifest', () => {
             const discovered = load_sources_from_manifest(subdirectory);
             expect(discovered).not.toBeUndefined();
             expect(discovered?.entries).toEqual(['patchlab']);
-            // `get_repository_root` returns forward-slash paths (git output);
-            // compare after normalizing both sides to forward slashes.
-            expect(canonical_path(discovered?.base_directory ?? '')).toBe(
-                canonical_path(git_root),
-            );
+            // `get_repository_root` returns the canonical realpath of the git root.
+            expect(discovered?.base_directory).toBe(fs.realpathSync(git_root));
         } finally {
             fs.rmSync(git_root, { recursive: true, force: true });
         }

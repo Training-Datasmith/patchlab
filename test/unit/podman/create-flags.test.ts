@@ -110,4 +110,22 @@ describe('create_container — resource-limit flags', () => {
         expect(argv.indexOf('--pids-limit')).toBeLessThan(image_index);
         expect(argv.indexOf('--blkio-weight')).toBeLessThan(image_index);
     });
+
+    it('emits keep-id userns and host uid when a podman socket is bind-mounted', () => {
+        create_container('test', 'image:latest', {
+            volume_mounts: ['/run/user/1000/podman/podman.sock:/run/podman/podman.sock'],
+        });
+        const argv = captured_argv();
+        expect(argv).toContain('--userns=keep-id');
+
+        // Mirrors push_socket_userns_flag: --user only when Node exposes host uid/gid
+        // (Unix). Windows has no getuid/getgid, so socket mounts still get keep-id
+        // but not an explicit uid mapping.
+        if (typeof process.getuid === 'function' && typeof process.getgid === 'function') {
+            expect(argv).toContain('--user');
+            expect(argv[argv.indexOf('--user') + 1]).toBe(`${process.getuid()}:${process.getgid()}`);
+        } else {
+            expect(argv).not.toContain('--user');
+        }
+    });
 });

@@ -1,23 +1,21 @@
 /**
  * End-to-end coverage for detect → resolve_socket_mount → build_volume_mounts /
- * build_environment_variables → podman create. Unlike sandbox-podman.test.ts,
- * this file does NOT pre-supply volume_mounts or CONTAINER_HOST — the
- * production detection and approval pipeline must produce them.
+ * build_environment_variables when socket approval is denied. Host socket
+ * bind-mount tests were removed: they require a Linux-native Unix socket and
+ * always skipped on Windows and macOS.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { create_sandbox_from_directory } from '../../test_helpers.js';
 import { DEFAULT_IMAGE } from '../../../src/container_runtime.js';
-import { resolve_podman_socket_path } from '../../../src/detect/index.js';
 import { exec_runtime_cli } from '../../helpers/exec_runtime_cli.js';
 import {
     create_integration_cleanup_registry,
     register_destroy_sandbox,
 } from '../../helpers/integration_cleanup.js';
-import { ensure_host_podman_socket, HOST_PODMAN_SOCKET_SKIP_REASON } from '../../helpers/podman_socket.js';
 
 const GIT_ENVIRONMENT = {
     ...process.env,
@@ -63,44 +61,9 @@ function build_podman_detecting_repository(): string {
 
 describe('detect → provisioning socket pipeline', () => {
     const cleanup = create_integration_cleanup_registry();
-    let host_podman_socket: string | null = null;
-
-    beforeAll(async () => {
-        const handle = await ensure_host_podman_socket();
-        if (handle) {
-            host_podman_socket = handle.path;
-            cleanup.register(() => handle.stop());
-        }
-    });
 
     afterAll(async () => {
         await cleanup.run_all();
-    });
-
-    it('mounts the detected podman socket and sets CONTAINER_HOST when allow_socket_mount is true', async (context) => {
-        if (!host_podman_socket) {
-            context.skip(HOST_PODMAN_SOCKET_SKIP_REASON);
-        }
-
-        const source_directory = build_podman_detecting_repository();
-        cleanup.register(() => fs.rmSync(source_directory, { recursive: true, force: true }));
-
-        const expected_socket = resolve_podman_socket_path();
-        const manifest = await create_sandbox_from_directory(source_directory, {
-            // Non-patchlab base: set_up_image_tier installs git before baseline init.
-            image: DEFAULT_IMAGE,
-            no_install: true,
-            allow_socket_mount: true,
-        });
-        register_destroy_sandbox(cleanup, manifest.id);
-
-        const mounts = inspect_mounts(manifest.container_name);
-        const socket_mount = mounts.find((mount) => mount.Destination === '/run/podman/podman.sock');
-        expect(socket_mount).toBeDefined();
-        expect(socket_mount?.Source.replaceAll('\\', '/')).toBe(expected_socket.replaceAll('\\', '/'));
-
-        const environment = inspect_environment(manifest.container_name);
-        expect(environment).toContain('CONTAINER_HOST=unix:///run/podman/podman.sock');
     });
 
     it('omits the socket mount when socket approval is not granted', async () => {

@@ -30,7 +30,7 @@ import {
     overlay_multi_source_host_files,
     prepare_workspace,
 } from '../../../src/sandbox/workspace_staging.js';
-import { copy_to_container, exec_container } from '../../../src/container_runtime.js';
+import { copy_to_container, exec_container, fix_workspace_ownership_if_needed } from '../../../src/container_runtime.js';
 import type { Source_Specification } from '../../../src/manifest.js';
 import type { Npm_Package_Requirement } from '../../../src/detect/index.js';
 import {
@@ -40,6 +40,7 @@ import {
 
 const mocked_exec_container = vi.mocked(exec_container);
 const mocked_copy_to_container = vi.mocked(copy_to_container);
+const mocked_fix_workspace_ownership = vi.mocked(fix_workspace_ownership_if_needed);
 
 function make_source(overrides: Partial<Source_Specification> = {}): Source_Specification {
     return {
@@ -154,6 +155,7 @@ describe('copy_multi_source_files — gitignore support', () => {
 describe('prepare_workspace', () => {
     beforeEach(() => {
         mocked_exec_container.mockReset();
+        mocked_fix_workspace_ownership.mockReset();
     });
 
     it('issues a single sh -c that rm -rfs then mkdir -ps, with the path as a positional arg', () => {
@@ -167,7 +169,12 @@ describe('prepare_workspace', () => {
         expect(mocked_exec_container.mock.calls[0]).toEqual([
             'container-x',
             ['sh', '-c', 'rm -rf "$1" && mkdir -p "$1"', 'sh', '/home/patchlab/workspace'],
+            { user: 'root' },
         ]);
+        expect(mocked_fix_workspace_ownership).toHaveBeenCalledWith(
+            'container-x',
+            '/home/patchlab/workspace',
+        );
     });
 
     it('passes a path with shell metacharacters as a positional arg, not into the script', () => {
@@ -175,10 +182,11 @@ describe('prepare_workspace', () => {
         // it must arrive as $1 (data), and the script text must NOT contain it.
         prepare_workspace('container-x', '/opt/my tool; rm -rf /');
 
-        const [, command] = mocked_exec_container.mock.calls[0];
+        const [, command, options] = mocked_exec_container.mock.calls[0];
         expect(command).toEqual([
             'sh', '-c', 'rm -rf "$1" && mkdir -p "$1"', 'sh', '/opt/my tool; rm -rf /',
         ]);
+        expect(options).toEqual({ user: 'root' });
         // The dangerous string is the positional arg, never spliced into the script.
         expect(command[2]).toBe('rm -rf "$1" && mkdir -p "$1"');
         expect(command[2]).not.toContain('rm -rf /');

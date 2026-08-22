@@ -197,6 +197,12 @@ function push_socket_userns_flag(args: string[], volume_mounts: string[] | undef
             args.push('--userns', 'host');
         } else {
             args.push('--userns=keep-id');
+            // Rootless podman sockets are owned by the invoking host uid. Map the
+            // container process to that uid so in-sandbox podman can dial the
+            // bind-mounted socket (image USER is often uid 1000 on CI runners).
+            if (typeof process.getuid === 'function' && typeof process.getgid === 'function') {
+                args.push('--user', `${process.getuid()}:${process.getgid()}`);
+            }
         }
     }
 }

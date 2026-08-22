@@ -177,6 +177,7 @@ jobs:
               exit 1
             fi
           fi
+          chmod go+rw "$SOCKET_PATH" 2>/dev/null || true
           npx vitest run --project integration --project integration-podman --shard=${{ matrix.shard }}/4
         env:
           PATCHLAB_CONTAINER_RUNTIME: podman
@@ -216,7 +217,16 @@ jobs:
         run: |
           brew untap aws/tap 2>/dev/null || true
           brew install lima
-          limactl start --tty=false default || limactl start --tty=false
+          for attempt in 1 2 3; do
+            if limactl start --tty=false; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "Lima VM failed to start after ${attempt} attempts" >&2
+              exit 1
+            fi
+            sleep 15
+          done
       - name: Verify nerdctl runtime
         run: |
           nerdctl.lima --version

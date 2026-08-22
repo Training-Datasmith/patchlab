@@ -58,6 +58,30 @@ export function inspect_host_config(container_name: string): Inspected_Host_Conf
  * on THIS host. When the kernel cannot enforce cgroups, create accepts
  * `--memory 1g` but inspect reports `HostConfig.Memory: 0`.
  */
+/**
+ * Probe whether the active runtime can start a container with `--blkio-weight`.
+ * GHA rootless podman often accepts create but fails start when `io.weight`
+ * cgroup controllers are absent.
+ */
+export function detect_runtime_supports_blkio_weight(): boolean {
+    const probe_name = `patchlab-blkio-probe-${Date.now()}`;
+    try {
+        exec_runtime_cli([
+            'create', '--name', probe_name, '--blkio-weight', '500', 'node:22-slim', 'sleep', 'infinity',
+        ], { stdio: 'pipe' });
+        exec_runtime_cli(['start', probe_name], { stdio: 'pipe' });
+        return true;
+    } catch {
+        return false;
+    } finally {
+        try {
+            exec_runtime_cli(['rm', '-f', probe_name], { stdio: 'pipe' });
+        } catch {
+            /* best-effort */
+        }
+    }
+}
+
 export function detect_runtime_enforces_limits(): boolean {
     const probe_name = `patchlab-resource-limit-probe-${Date.now()}`;
     try {

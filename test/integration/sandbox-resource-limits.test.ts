@@ -37,7 +37,7 @@ import { build_image, PATCHLAB_TEST_LABEL, remove_test_images } from '../../src/
 import { image_exists } from '../../src/container_runtime.js';
 import { DEFAULT_TEST_TOOL } from '../helpers/stub_tool_provider.js';
 import { next_session_number, read_session_metadata } from '../../src/archive.js';
-import { detect_runtime_enforces_limits, exec_runtime_cli, inspect_host_config } from '../helpers/exec_runtime_cli.js';
+import { detect_runtime_enforces_limits, detect_runtime_supports_blkio_weight, exec_runtime_cli, inspect_host_config } from '../helpers/exec_runtime_cli.js';
 import {
     create_integration_cleanup_registry,
     register_destroy_sandbox,
@@ -91,9 +91,11 @@ describe('sandbox resource limits applied to podman container', () => {
     let sandbox_id: string;
     let create_container_name: string;
     let limits_enforced: boolean;
+    let blkio_weight: number | null;
 
     beforeAll(() => {
         limits_enforced = detect_runtime_enforces_limits();
+        blkio_weight = detect_runtime_supports_blkio_weight() ? 500 : null;
     });
 
     it('create applies --memory, --cpus, --pids-limit, --blkio-weight via podman flags', async () => {
@@ -107,7 +109,7 @@ describe('sandbox resource limits applied to podman container', () => {
                 memory_limit: '1g',
                 cpu_limit: '1.0',
                 pids_limit: 256,
-                blkio_weight: 500,
+                ...(blkio_weight === null ? {} : { blkio_weight }),
             },
         });
         sandbox_id = manifest.id;
@@ -129,11 +131,11 @@ describe('sandbox resource limits applied to podman container', () => {
         // podman converts --cpus to NanoCpus: cpus * 1e9.
         expect(host.NanoCpus).toBe(1_000_000_000);
         expect(host.PidsLimit).toBe(256);
-        // blkio_weight reaches `HostConfig.BlkioWeight` from the CLI argv.
-        // The other three fields are well-covered by the lines above; this
-        // assertion locks the fourth so a regression dropping blkio from
-        // the runtime argv does not silently pass.
-        expect(host.BlkioWeight).toBe(500);
+        // blkio_weight reaches `HostConfig.BlkioWeight` from the CLI argv when the
+        // runtime cgroup stack supports `io.weight` (skipped on hosts that reject it).
+        if (blkio_weight !== null) {
+            expect(host.BlkioWeight).toBe(blkio_weight);
+        }
     }, 600_000);
 
     it('manifest persists resolved resource limits after create', () => {
@@ -143,7 +145,7 @@ describe('sandbox resource limits applied to podman container', () => {
             memory: '1g',
             cpus: '1.0',
             pids: 256,
-            blkio_weight: 500,
+            blkio_weight,
         });
     });
 
@@ -164,8 +166,9 @@ describe('sandbox resource limits applied to podman container', () => {
         expect(host.Memory).toBe(1024 * 1024 * 1024);
         expect(host.NanoCpus).toBe(1_000_000_000);
         expect(host.PidsLimit).toBe(256);
-        // blkio_weight inherits from the manifest layer too.
-        expect(host.BlkioWeight).toBe(500);
+        if (blkio_weight !== null) {
+            expect(host.BlkioWeight).toBe(blkio_weight);
+        }
     }, 600_000);
 
     it('resume writes resolved limits to the new session metadata', () => {
@@ -175,7 +178,7 @@ describe('sandbox resource limits applied to podman container', () => {
             memory: '1g',
             cpus: '1.0',
             pids: 256,
-            blkio_weight: 500,
+            blkio_weight,
         });
     });
 
@@ -206,10 +209,12 @@ describe('sandbox resource limits applied to podman container', () => {
         expect(host.Memory).toBe(2 * 1024 * 1024 * 1024);
         expect(host.PidsLimit).toBe(1024);
         // Fields NOT supplied via CLI inherit from the manifest (1.0 cpus,
-        // 500 blkio_weight). Locks the per-field precedence: the CLI layer
+        // blkio_weight when supported). Locks the per-field precedence: the CLI layer
         // is partial; only the supplied fields override.
         expect(host.NanoCpus).toBe(1_000_000_000);
-        expect(host.BlkioWeight).toBe(500);
+        if (blkio_weight !== null) {
+            expect(host.BlkioWeight).toBe(blkio_weight);
+        }
 
         // The newly-resumed session's metadata records the resolved values
         // (per-field winners), not the raw manifest layer.
@@ -218,6 +223,6 @@ describe('sandbox resource limits applied to podman container', () => {
         expect(new_metadata?.resource_limits?.memory).toBe('2g');
         expect(new_metadata?.resource_limits?.pids).toBe(1024);
         expect(new_metadata?.resource_limits?.cpus).toBe('1.0');
-        expect(new_metadata?.resource_limits?.blkio_weight).toBe(500);
+        expect(new_metadata?.resource_limits?.blkio_weight).toBe(blkio_weight);
     }, 600_000);
 });

@@ -187,31 +187,6 @@ export function build_session_path(
 }
 
 /**
- * Locate the host git repository root containing `source_path`.
- * Throws if the path is not inside a git repository.
- */
-export function get_repository_root(source_path: string): string {
-    const resolved = path.resolve(source_path);
-    try {
-        const output = execFileSync('git', ['rev-parse', '--show-toplevel'], {
-            cwd: resolved,
-            stdio: ['ignore', 'pipe', 'pipe'],
-            encoding: 'utf-8',
-        });
-        return output.trim();
-    } catch (_not_a_git_repository) {
-        throw new Error(
-            `Source path is not inside a git repository: ${resolved}. ` +
-            `Patchlab requires the source to be in a git repository so the patchlab branch can be created.`
-        );
-    }
-}
-
-/**
- * Compute the relative path from `repository_root` to `source_path` with no
- * trailing slash. Returns `""` if `source_path` is the repository root.
- */
-/**
  * Resolve `input` to an absolute path, following symlinks when the target exists.
  * Non-existent paths (e.g. unit-test fixtures) fall back to `path.resolve`.
  */
@@ -224,6 +199,36 @@ function canonical_existing_path(input: string): string {
     }
 }
 
+/**
+ * Locate the host git repository root containing `source_path`.
+ * Throws if the path is not inside a git repository.
+ *
+ * Git reports the root with platform-native spelling (forward slashes on every
+ * host; 8.3 short names on some Windows runners). Canonicalize through
+ * `realpathSync` so callers compare and relativize against the same on-disk
+ * location as `fs.realpathSync` on source paths.
+ */
+export function get_repository_root(source_path: string): string {
+    const resolved = path.resolve(source_path);
+    try {
+        const output = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+            cwd: resolved,
+            stdio: ['ignore', 'pipe', 'pipe'],
+            encoding: 'utf-8',
+        });
+        return canonical_existing_path(output.trim());
+    } catch (_not_a_git_repository) {
+        throw new Error(
+            `Source path is not inside a git repository: ${resolved}. ` +
+            `Patchlab requires the source to be in a git repository so the patchlab branch can be created.`
+        );
+    }
+}
+
+/**
+ * Compute the relative path from `repository_root` to `source_path` with no
+ * trailing slash. Returns `""` if `source_path` is the repository root.
+ */
 export function get_source_prefix(
     repository_root: string,
     source_path: string
