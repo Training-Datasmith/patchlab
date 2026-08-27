@@ -1,15 +1,50 @@
 # patchlab
 
-Isolated sandbox laboratory for creating patches to optionally merge back to the source.
+**Isolated patch laboratory for coding agents**
 
-Patchlab spins up a Podman container with your source files, a git baseline, and an AI coding tool pre-installed. You work inside the container, and when you're done, patchlab extracts a unified diff patch that you can review and apply to your original source.
+> Patchlab copies your source into a container, runs a coding tool with full permissions, and extracts a patch. Your working tree does not change until you apply it.
+
+Coding agents work fastest in YOLO mode — install packages, run shell commands, rewrite files. Bind-mounting the live tree means mistakes land on disk immediately. Restricting the agent often means it cannot finish the job. Patchlab takes a third path: **copy the work into a disposable lab, let the tool cook, take a patch out.**
+
+The lab is tool-agnostic and container-agnostic. What is wired up today is listed under [Prerequisites](#prerequisites) and [Supported Tools](#supported-tools).
+
+1. **Host tree untouched** — sources are copied in, not bind-mounted. `.env`, keys, and PEM files are excluded by default (`--include-secrets` to opt in).
+2. **Loopback models reachable** — tools that talk to Ollama, LM Studio, and similar on `127.0.0.1` can use `host.patchlab.internal` (the built-in OpenCode path is documented in [OpenCode in patchlab](documents/opencode.md)).
+3. **Reviewable output** — exit produces a unified diff and stacked commits on `patchlab/{id}` branches. Review with `patchlab apply . <patch> --dry-run` before merge.
+
+## Quick start
+
+```bash
+git clone https://github.com/Training-Datasmith/patchlab.git
+cd patchlab
+npm install && npm run build && npm link
+
+patchlab create .                    # sandbox; host tree unchanged
+# … work in the sandbox …
+patchlab apply . /tmp/patchlab-*.patch --dry-run
+patchlab apply . /tmp/patchlab-*.patch
+```
+
+One-shot prompt (no TUI): `patchlab create . -p "Add tests for utilities.ts"`. Additional tools: [configuration-based providers](documents/configuration-based-providers.md).
+
+## Why patchlab
+
+| Approach | Working tree | When it changes |
+|----------|--------------|-----------------|
+| **patchlab** | A copy of your sources | After you apply a patch |
+| Bind-mount sandbox | Your real files | As the tool writes |
+| OS-native agent sandbox | Project directory writable | As the tool writes |
+| Tool on the host | Your real files | As the tool writes |
+
 
 ## Prerequisites
 
 - A container runtime:
-  - **macOS (supported):** [Lima](https://lima-vm.io/) with nerdctl — see [macOS setup](#macos-setup-with-lima--nerdctl)
+  - **Windows:** [Podman](https://podman.io/docs/installation/windows) with a Podman machine — see [Windows setup](#windows-setup-with-podman)
+  - **macOS:** [Lima](https://lima-vm.io/) with nerdctl — see [macOS setup](#macos-setup-with-lima--nerdctl)
   - **Linux / CI:** [Podman](https://podman.io/docs/installation) installed and running
 - Node.js 20+
+- Git (recommended on all platforms)
 
 ### macOS setup with Lima + nerdctl
 
@@ -34,7 +69,42 @@ alias nerdctl='nerdctl.lima'
 export PATCHLAB_CONTAINER_RUNTIME=nerdctl   # optional; auto-detected on macOS
 ```
 
-Set `PATCHLAB_CONTAINER_RUNTIME=podman` to force Podman instead. Linux defaults to Podman.
+Set `PATCHLAB_CONTAINER_RUNTIME=podman` to force Podman instead. Linux and Windows default to Podman.
+
+### Windows setup with Podman
+
+Patchlab runs the CLI natively on Windows and executes sandboxes inside a **Podman machine** VM (same model as Podman on macOS). WSL is not required.
+
+Run the setup script in PowerShell:
+
+```powershell
+.\scripts\set-up-windows-containers.ps1
+```
+
+Or install manually:
+
+1. Install [Podman Desktop](https://podman.io/docs/installation/windows) or the Podman CLI and ensure `podman` is on your `PATH`.
+2. Initialize and start a machine (first run downloads a VM image):
+
+```powershell
+podman machine init    # skip if a machine already exists
+podman machine start
+podman run --rm hello-world
+```
+
+3. Build and link patchlab from a clone (Git Bash or PowerShell):
+
+```powershell
+npm install
+npm run build
+npm link
+```
+
+Patchlab auto-starts the Podman machine when you run `patchlab create` if the VM is stopped. If the machine is stuck, `podman machine stop` then `podman machine start`; patchlab can also prompt to reset the VM.
+
+**What works on Windows today:** unit tests, Windows-specific path tests (`test/windows/`), integration tests when Podman responds, local-model proxy, drive-letter paths, OpenCode host-config copy.
+
+**Gaps:** nerdctl/Lima is macOS-only. POSIX-only filesystem tests run inside a Linux container via `npm run test:posix`, not on the native Windows kernel. Resource-limit cgroup warnings are Linux-specific; the Podman machine VM handles limits inside the guest.
 
 ## Install
 
@@ -56,7 +126,7 @@ This makes the `patchlab` command available globally via symlink.
 npm install -g patchlab
 ```
 
-## Quick Start
+## Examples
 
 ```bash
 # List available providers (includes built-in OpenCode)
@@ -389,20 +459,11 @@ Object entries behave identically to passing `--source <path> --mount <mount>` o
 
 ## Supported Tools
 
-Patchlab ships **OpenCode** as the built-in default tool. `patchlab create .` launches OpenCode without `--tool`. See [documents/opencode.md](documents/opencode.md) for host config copy, credentials, and local-model proxying.
+Patchlab is tool-agnostic. The built-in default today is **OpenCode** — `patchlab create .` launches it without `--tool`. See [documents/opencode.md](documents/opencode.md) for host config copy, credentials, and local-model proxying.
 
 Additional providers are registered via YAML manifests under `~/.config/patchlab/tools/` or `~/.patchlab/tools/` (user-global) or `<repository>/.patchlab/tools/` (per-source). Run `patchlab list-tools` to see what is available.
 
 See [documents/configuration-based-providers.md](documents/configuration-based-providers.md) for the manifest format. To replace the built-in OpenCode provider, use `overrides_builtin: true` in a manifest named `opencode`.
-
-Patchlab tags each built image with a per-tool state label (`biz.ecartz.patchlab.tool.<tool>`) that records what authentication was done at build time. The four values are:
-
-- **`absent`**: the image has no per-tool label for this tool.
-- **`installed`**: the tool binary is in the image; no authentication was injected at build time.
-- **`authenticated`**: the tool binary AND credentials are baked into the image filesystem (file-copy authentication).
-- **`ready`**: the tool binary is in the image, and `inject_authentication` ran at build time, but the credentials are NOT in the image — they are supplied at container-create time via environment variable.
-
-OpenCode uses authentication method `none`, so its cached images typically carry the `installed` label. Configured providers with `file_copy` or `environment_variables` authentication use the other states as documented above.
 
 ```bash
 patchlab list-tools
@@ -455,12 +516,23 @@ The `--verbose` flag is reserved at the program level; subcommands SHALL NOT def
 
 ## How It Works
 
-1. **Create**: Patchlab copies your source files into a Podman container, initializes a git baseline commit, and optionally installs npm dependencies.
+1. **Create**: Patchlab copies your source files into a container, initializes a git baseline commit, and optionally installs npm dependencies.
 2. **Work**: Your chosen AI coding tool runs inside the container with full access to modify files.
 3. **Extract**: On exit, patchlab generates a unified diff against the baseline.
 4. **Apply**: You review the patch and apply it to your source directory when ready.
 
 Cached images are reused across sandboxes to speed up subsequent creates. Patchlab auto-detects project language, required system packages, and services from your project files.
+
+## Image cache labels
+
+Patchlab tags each built image with a per-tool state label (`biz.ecartz.patchlab.tool.<tool>`) that records what authentication was done at build time:
+
+- **`absent`** — the image has no per-tool label for this tool.
+- **`installed`** — the tool binary is in the image; no authentication was injected at build time.
+- **`authenticated`** — the tool binary and credentials are baked into the image filesystem (file-copy authentication).
+- **`ready`** — the tool binary is in the image, `inject_authentication` ran at build time, but credentials are supplied at container-create time via environment variable.
+
+OpenCode uses authentication method `none`, so its cached images typically carry the `installed` label.
 
 ## License
 

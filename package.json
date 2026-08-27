@@ -1,7 +1,7 @@
 {
   "name": "patchlab",
   "version": "1.0.0",
-  "description": "Isolated sandbox laboratory for creating patches to optionally merge back to the source",
+  "description": "Isolated patch laboratory for coding agents — copy source in, run an AI tool, extract a reviewable patch",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -40,7 +40,8 @@
     "patch",
     "sandbox",
     "diff",
-    "code-generation"
+    "code-generation",
+    "coding-agent"
   ],
   "license": "GPL-3.0-or-later",
   "repository": {
